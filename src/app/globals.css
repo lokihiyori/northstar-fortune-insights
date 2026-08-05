@@ -1,1 +1,167 @@
 @import "tailwindcss";
+
+/*
+ * Quiet Aurora — spec section 2.
+ * Tokens are declared as raw CSS variables so they can flip between light and
+ * dark, then mapped into Tailwind's theme with `@theme inline`. Using `inline`
+ * matters: it makes Tailwind emit `var(--color-*)` references rather than
+ * baking the light-mode hex into every utility class.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --ns-background: #f7f8fa;
+  --ns-surface: #ffffff;
+  --ns-surface-raised: #f1f5f7;
+  --ns-text-primary: #102035;
+  --ns-text-secondary: #5d6b7e;
+  --ns-brand-navy: #123b5d;
+  --ns-brand-teal: #1a8b87;
+  --ns-brand-gold: #d9a441;
+  --ns-success: #2f855a;
+  --ns-warning: #b7791f;
+  --ns-danger: #c2414b;
+  --ns-border: #dce3e8;
+
+  /* Derived: the single low-opacity aurora glow permitted on backgrounds. */
+  --ns-aurora-from: rgb(26 139 135 / 0.14);
+  --ns-aurora-to: rgb(18 59 93 / 0.1);
+}
+
+.dark {
+  --ns-background: #07111f;
+  --ns-surface: #0c192a;
+  --ns-surface-raised: #12243a;
+  --ns-text-primary: #f4f8fb;
+  --ns-text-secondary: #a9b7c6;
+  --ns-brand-navy: #80b9d8;
+  --ns-brand-teal: #53d2c8;
+  --ns-brand-gold: #f0c567;
+  --ns-success: #68d391;
+  --ns-warning: #f6c453;
+  --ns-danger: #ff8790;
+  --ns-border: #24384d;
+
+  --ns-aurora-from: rgb(83 210 200 / 0.16);
+  --ns-aurora-to: rgb(128 185 216 / 0.1);
+}
+
+@theme inline {
+  --color-background: var(--ns-background);
+  --color-surface: var(--ns-surface);
+  --color-surface-raised: var(--ns-surface-raised);
+  --color-text-primary: var(--ns-text-primary);
+  --color-text-secondary: var(--ns-text-secondary);
+  --color-brand-navy: var(--ns-brand-navy);
+  --color-brand-teal: var(--ns-brand-teal);
+  --color-brand-gold: var(--ns-brand-gold);
+  --color-success: var(--ns-success);
+  --color-warning: var(--ns-warning);
+  --color-danger: var(--ns-danger);
+  --color-border: var(--ns-border);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-manrope), var(--font-inter), ui-sans-serif, sans-serif;
+
+  /* Spec section 2: 4, 8, 12, 16, 24, 32, 48, 64, 96. */
+  --radius-card: 1rem; /* 16px */
+  --radius-control: 0.625rem; /* 10px */
+
+  --shadow-card: 0 1px 2px rgb(16 32 53 / 0.04), 0 8px 24px -12px rgb(16 32 53 / 0.12);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    /* Spec section 2: minimum body size 16px, line height 1.55–1.65. */
+    font-size: 1rem;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    line-height: 1.2;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Visible focus on every interactive element (spec section 15). */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-teal);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@utility aurora-glow {
+  position: relative;
+  isolation: isolate;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: -20%;
+    height: 70%;
+    z-index: -1;
+    pointer-events: none;
+    background: radial-gradient(
+      60% 55% at 50% 0%,
+      var(--ns-aurora-from) 0%,
+      var(--ns-aurora-to) 45%,
+      transparent 75%
+    );
+  }
+}
+
+/*
+ * Path-drawing is permitted on the landing constellation and the recommendation
+ * map only (spec section 2). The base layer's `prefers-reduced-motion` rule
+ * collapses the duration, so the line still ends up fully drawn rather than
+ * stuck at its start offset.
+ */
+@keyframes ns-draw {
+  from {
+    stroke-dashoffset: 320;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.ns-constellation {
+  stroke-dasharray: 320;
+  animation: ns-draw 900ms ease-out both;
+}
