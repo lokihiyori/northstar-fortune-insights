@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/features/auth/guards";
+import { recordEvent } from "@/features/analytics/events";
 import { getEntitlements } from "@/features/billing/entitlements";
 import { prisma } from "@/lib/db/prisma";
 
@@ -64,6 +65,8 @@ export async function createPlanFromPath(formData: FormData): Promise<void> {
     select: { id: true },
   });
 
+  await recordEvent("plan_created", user.id, { taskCount: path.actions.length });
+
   revalidatePath("/app");
   redirect(`/app/plans/${plan.id}`);
 }
@@ -88,6 +91,8 @@ export async function setTaskStatus(formData: FormData): Promise<void> {
     where: { id: task.id },
     data: { status: status as (typeof allowed)[number] },
   });
+
+  if (status === "DONE") await recordEvent("task_completed", user.id);
 
   revalidatePath(`/app/plans/${task.planId}`);
   revalidatePath("/app");

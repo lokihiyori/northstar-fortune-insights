@@ -44,9 +44,11 @@ model User {
   constraints UserConstraint[]
   requests    GuidanceRequest[]
   reports     GuidanceReport[]
-  plans       ActionPlan[]
-  usage       UsageLedger[]
-  feedback    Feedback[]
+  plans        ActionPlan[]
+  usage        UsageLedger[]
+  feedback     Feedback[]
+  subscription Subscription?
+  events       AnalyticsEvent[]
 
   @@index([createdAt])
   @@map("users")
@@ -579,6 +581,85 @@ model UsageLedger {
   @@unique([userId, requestId, feature])
   @@index([userId, periodKey, feature])
   @@map("usage_ledger")
+}
+
+// ---------------------------------------------------------------------------
+// Billing — a local projection of Stripe, never the authority on payment.
+// ---------------------------------------------------------------------------
+
+enum SubscriptionPlan {
+  FREE
+  PLUS
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+  UNPAID
+}
+
+model Subscription {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  plan   SubscriptionPlan   @default(FREE)
+  status SubscriptionStatus @default(ACTIVE)
+
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  stripePriceId        String?
+
+  currentPeriodEnd  DateTime?
+  cancelAtPeriodEnd Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Provider ids must be unique so a webhook can never attach one customer's
+  // subscription to a second account.
+  @@unique([stripeCustomerId])
+  @@unique([stripeSubscriptionId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+/// Every webhook delivery Stripe has sent us, so replays are no-ops.
+model ProcessedWebhookEvent {
+  id          String   @id
+  type        String
+  processedAt DateTime @default(now())
+
+  @@index([type])
+  @@map("processed_webhook_events")
+}
+
+// ---------------------------------------------------------------------------
+// Product analytics — spec section 14.
+// ---------------------------------------------------------------------------
+
+model AnalyticsEvent {
+  id String @id @default(cuid())
+
+  /// Nullable so pre-signup funnel steps can be recorded.
+  userId    String?
+  sessionId String?
+  eventName String
+
+  /// Never contains question text or any other private content.
+  properties Json?
+
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventName, createdAt])
+  @@index([userId, createdAt])
+  @@map("analytics_events")
 }
 
 model PromptVersion {

@@ -1,10 +1,20 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  // Resolves the `@/*` alias from tsconfig.json natively.
-  resolve: { tsconfigPaths: true },
+  resolve: {
+    // Resolves the `@/*` alias from tsconfig.json natively.
+    tsconfigPaths: true,
+    // See tests/stubs/server-only.ts — the real boundary is still enforced by
+    // `next build`, this only makes server modules importable under Vitest.
+    // fileURLToPath, not `.pathname`: on Windows the latter leaves a leading
+    // slash and percent-encoded spaces, which Vite cannot resolve.
+    alias: {
+      "server-only": fileURLToPath(new URL("./tests/stubs/server-only.ts", import.meta.url)),
+    },
+  },
   test: {
     globals: true,
     environment: "jsdom",

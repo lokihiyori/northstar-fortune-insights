@@ -121,6 +121,28 @@ export async function getLatestReportForRequest(
   return row ? toView(row) : null;
 }
 
+/** Every version produced by the same request, newest first. */
+export async function listVersionsForReport(reportId: string, userId: string) {
+  const report = await prisma.guidanceReport.findFirst({
+    where: { id: reportId, userId, deletedAt: null },
+    select: { requestId: true },
+  });
+  if (!report) return [];
+
+  return prisma.guidanceReport.findMany({
+    where: { requestId: report.requestId, userId, deletedAt: null },
+    orderBy: { version: "desc" },
+    select: { id: true, version: true, createdAt: true, confidenceBasis: true },
+  });
+}
+
+export async function getFeedbackForReport(reportId: string, userId: string) {
+  return prisma.feedback.findUnique({
+    where: { userId_reportId: { userId, reportId } },
+    select: { rating: true, tags: true, comment: true },
+  });
+}
+
 export async function listReportsForUser(
   userId: string,
   options: { includeArchived?: boolean } = {},

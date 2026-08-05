@@ -10,7 +10,7 @@ export const APP_NAV = [
   { href: "/app/history", label: "History" },
   { href: "/app/resources", label: "Resources" },
   { href: "/app/profile", label: "Compass" },
-  { href: "/app/settings", label: "Settings" },
+  { href: "/app/billing", label: "Plan" },
 ] as const;
 
 function isActive(pathname: string, href: string, exact?: boolean): boolean {

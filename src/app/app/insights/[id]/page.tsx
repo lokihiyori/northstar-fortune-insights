@@ -4,9 +4,15 @@ import { notFound } from "next/navigation";
 import { RecommendationMap } from "@/components/guidance/recommendation-map";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
+import { FeedbackPanel } from "@/components/guidance/feedback-panel";
 import { requireUser } from "@/features/auth/guards";
-import { getReportForUser } from "@/features/guidance/queries";
+import {
+  getFeedbackForReport,
+  getReportForUser,
+  listVersionsForReport,
+} from "@/features/guidance/queries";
 import { formatReportDate } from "@/features/guidance/report";
+import { archiveReport, regenerateReport } from "@/features/guidance/report-actions";
 import { CONFIDENCE_COPY, TOPIC_COPY } from "@/features/guidance/types";
 import { createPlanFromPath } from "@/features/plans/actions";
 
@@ -18,6 +24,11 @@ export default async function InsightPage({ params }: { params: Promise<{ id: st
 
   const report = await getReportForUser(id, user.id);
   if (!report) notFound();
+
+  const [versions, feedback] = await Promise.all([
+    listVersionsForReport(id, user.id),
+    getFeedbackForReport(id, user.id),
+  ]);
 
   const bestPath = report.paths[0];
   const evidenceCount = report.paths.reduce((total, path) => total + path.evidence.length, 0);
@@ -48,7 +59,53 @@ export default async function InsightPage({ params }: { params: Promise<{ id: st
           <ButtonLink href={`/app/compare/${report.id}`} variant="secondary">
             Compare the paths
           </ButtonLink>
+
+          <form action={regenerateReport}>
+            <input type="hidden" name="reportId" value={report.id} />
+            <Button type="submit" variant="secondary">
+              Update assumptions and regenerate
+            </Button>
+          </form>
+
+          <form action={archiveReport}>
+            <input type="hidden" name="reportId" value={report.id} />
+            <input type="hidden" name="restore" value={report.archivedAt ? "true" : "false"} />
+            <Button type="submit" variant="ghost">
+              {report.archivedAt ? "Restore" : "Archive"}
+            </Button>
+          </form>
         </div>
+
+        {versions.length > 1 ? (
+          <nav aria-label="Report versions" className="mt-6">
+            <h2 className="text-text-secondary text-xs font-medium tracking-wide uppercase">
+              Versions
+            </h2>
+            <ul className="mt-2 flex flex-wrap gap-2">
+              {versions.map((version) => {
+                const current = version.id === report.id;
+                return (
+                  <li key={version.id}>
+                    <Link
+                      href={`/app/insights/${version.id}`}
+                      aria-current={current ? "page" : undefined}
+                      className={
+                        current
+                          ? "border-brand-teal bg-brand-teal/10 rounded-full border px-3 py-1 text-sm"
+                          : "border-border text-text-secondary hover:bg-surface-raised rounded-full border px-3 py-1 text-sm"
+                      }
+                    >
+                      Version {version.version}
+                      <span className="text-text-secondary ml-2 text-xs">
+                        {formatReportDate(version.createdAt.toISOString())}
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
+        ) : null}
       </header>
 
       <section
@@ -100,6 +157,10 @@ export default async function InsightPage({ params }: { params: Promise<{ id: st
           Recommended paths
         </h2>
         <RecommendationMap report={report} />
+      </section>
+
+      <section className="mt-8">
+        <FeedbackPanel reportId={report.id} existing={feedback} />
       </section>
 
       <footer className="border-border mt-8 border-t pt-6">

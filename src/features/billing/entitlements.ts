@@ -38,9 +38,13 @@ export function entitlementsForPlan(plan: "free" | "plus"): Entitlements {
   return plan === "plus" ? PLUS : FREE;
 }
 
-/** Async now so Phase 6 can read the subscription without changing callers. */
-export function getEntitlements(_userId: string): Promise<Entitlements> {
-  return Promise.resolve(FREE);
+/**
+ * Derived from the local subscription projection, never from a client redirect
+ * and never from a live Stripe call on the request path (spec section 13).
+ */
+export async function getEntitlements(userId: string): Promise<Entitlements> {
+  const { effectivePlan } = await import("./subscription");
+  return entitlementsForPlan(await effectivePlan(userId));
 }
 
 /** Period key for the usage ledger, e.g. "2026-08". */

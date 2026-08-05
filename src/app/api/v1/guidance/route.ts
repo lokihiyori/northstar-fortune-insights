@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { requireApiUser } from "@/features/auth/guards";
+import { recordEvent } from "@/features/analytics/events";
 import { apiError, apiSuccess, fieldErrorsFrom } from "@/lib/api/response";
 import { getEntitlements } from "@/features/billing/entitlements";
 import { composerSchema } from "@/features/guidance/composer";
@@ -113,10 +114,27 @@ export async function POST(request: Request) {
     select: { id: true },
   });
 
+  // Topic and criteria count are analysable; the question text never is.
+  await recordEvent("guidance_requested", user.id, {
+    topic: parsed.data.topic,
+    criteriaCount: parsed.data.criteria.length,
+    includeProfile: parsed.data.includeProfile,
+  });
+
   after(async () => {
+    const startedAt = Date.now();
     const result = await runGuidancePipeline(created.id, input);
+
     // Usage is charged only on success — a failed generation is free.
-    if (result.ok) await recordReportUsage(user.id, created.id);
+    if (result.ok) {
+      await recordReportUsage(user.id, created.id);
+      await recordEvent("guidance_completed", user.id, {
+        topic: parsed.data.topic,
+        latencyMs: Date.now() - startedAt,
+      });
+    } else {
+      await recordEvent("guidance_failed", user.id, { code: result.code });
+    }
   });
 
   return apiSuccess({ requestId: created.id }, { status: 202 });
