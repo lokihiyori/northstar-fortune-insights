@@ -15,6 +15,9 @@ const { auth } = NextAuth(authConfig);
 export default auth;
 
 export const config = {
-  // Only /app. Matching auth endpoints or static assets would break sign-in.
-  matcher: ["/app/:path*"],
+  // /app and /admin. Matching auth endpoints or static assets would break
+  // sign-in. Note this only redirects *unauthenticated* requests — the edge
+  // config cannot read roles, so admin authorization is enforced entirely by
+  // `requireAdmin` in the layout, pages, and API handlers.
+  matcher: ["/app/:path*", "/admin/:path*"],
 };

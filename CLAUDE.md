@@ -109,14 +109,41 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
   before ranking. Exact cosine scan, no ANN index — see ADR 0003.
 - Usage is charged only on success, and the ledger's unique constraint makes it idempotent.
 
+## Admin and source ingestion (Phase 7)
+
+- **Authorization is server-side and layered.** `src/app/admin/layout.tsx` calls `requireAdmin`,
+  and every admin page, server action, and Route Handler calls a guard itself. Hidden navigation
+  is never the control. `src/proxy.ts` matches `/admin` too, but only redirects unauthenticated
+  requests — the edge config cannot read roles.
+- Non-admin users get a redirect on pages and the **403 `FORBIDDEN` envelope** on APIs.
+- **Admins are only created out-of-band.** There is no self-elevation path. Use `SEED_ADMIN=true`
+  with `pnpm db:seed`, or promote a row directly. Never commit admin credentials.
+- **All chunk writes go through `src/features/sources/ingest.ts`.** Nothing else writes
+  `source_chunks`, so chunking and embedding rules cannot drift between the admin UI and the seed.
+- Source content is untrusted evidence: chunked, hashed, and embedded, never parsed for directives.
+- **Lifecycle is Draft → Reviewed → Published → Retired** (`sources/lifecycle.ts`, pure functions).
+  Publishing additionally requires complete metadata _and_ fully embedded chunks — a published
+  source with no embeddings would look live while being invisible to retrieval.
+- **Publishing and retiring invalidate the retrieval cache** by bumping a generation counter
+  (`features/retrieval/cache.ts`). Redis is fail-open: an outage degrades to uncached correct
+  results, never an error (ADR 0004).
+- Retiring excludes a source from new retrieval but never rewrites historical report snapshots.
+  The `Citation → Source` FK is `onDelete: Restrict` for exactly that reason.
+- `AuditLog` is append-only. There is no update or delete helper, and secrets, prompts, and
+  personal fields are stripped from metadata before writing.
+
 ## Current phase
 
-**Phases 0–4 complete and verified against a live database.** Repository and tooling; Quiet
-Aurora design system and marketing site; authentication and onboarding; the app workspace
-(composer, report, compare, plan, history); and the guidance engine with rules, retrieval,
-structured generation, and citation validation.
+**Phases 0–7 complete and verified against a live database**, with one explicit exception below.
+Repository and tooling; design system and marketing site; authentication and onboarding; the app
+workspace; the guidance engine; action plans, feedback and report versioning; local billing,
+entitlements and analytics; and admin source ingestion with audit history.
 
-`tests/e2e/guidance.spec.ts` drives the whole pipeline against real PostgreSQL — no mocks.
+`tests/e2e/guidance.spec.ts` and `tests/e2e/admin.spec.ts` drive the real pipelines against real
+PostgreSQL — no mocks.
 
-Next: Phase 5 (action planning, feedback, and report versioning). Do not begin future phases
-without approval.
+**Still unverified: Stripe.** Checkout, Customer Portal, and webhook execution have never run
+against Stripe because no test-mode credentials are configured. The code exists and degrades
+cleanly without keys; do not describe it as verified until `stripe listen` has exercised it.
+
+Next: Phase 8 (hardening and deployment). Do not begin it without approval.

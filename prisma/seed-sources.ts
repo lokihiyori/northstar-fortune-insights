@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
 import type { PrismaClient } from "../src/generated/prisma/client";
 import { deterministicEmbedder, toVectorLiteral } from "../src/features/retrieval/embedder";
+import { canonicalizeUrl } from "../src/features/sources/canonicalize";
+import { chunkContent } from "../src/features/sources/chunker";
 
 /**
  * The reviewed corpus retrieval draws on.
@@ -202,48 +203,80 @@ export async function seedSources(prisma: PrismaClient): Promise<number> {
   let chunkCount = 0;
 
   for (const source of SOURCES) {
-    // Upsert on the canonical URL so re-seeding updates rather than duplicates.
-    const record = await prisma.source.upsert({
-      where: { canonicalUrl: source.canonicalUrl },
-      update: {
-        title: source.title,
-        publisher: source.publisher,
-        region: source.region,
-        topic: source.topic,
-        summary: source.summary,
-        status: "PUBLISHED",
-        reviewedAt: new Date("2026-07-01T00:00:00.000Z"),
-      },
-      create: {
-        title: source.title,
-        publisher: source.publisher,
-        canonicalUrl: source.canonicalUrl,
-        region: source.region,
-        topic: source.topic,
-        summary: source.summary,
-        status: "PUBLISHED",
-        reviewedAt: new Date("2026-07-01T00:00:00.000Z"),
-        publishedAt: new Date("2026-07-01T00:00:00.000Z"),
-      },
-      select: { id: true },
-    });
+    // Canonicalized with the same function the admin UI uses, so a seeded
+    // source and an admin-created one cannot end up with different URLs for the
+    // same page — which would defeat the unique constraint.
+    const canonical = canonicalizeUrl(source.canonicalUrl);
+    if (!canonical.ok) {
+      throw new Error(`Seed source "${source.slug}" has an invalid URL: ${canonical.reason}`);
+    }
+
+    // Prefer the row already at the canonical URL, then fall back to the raw
+    // one. The order matters: an `OR` could pick either row when both exist —
+    // for instance after a canonicalization rule change leaves a superseded
+    // record behind — and moving the wrong one onto the canonical URL violates
+    // the unique constraint. Without the fallback at all, a rule change would
+    // create a duplicate instead of migrating the existing source.
+    const prior =
+      (await prisma.source.findUnique({
+        where: { canonicalUrl: canonical.url },
+        select: { id: true },
+      })) ??
+      (await prisma.source.findUnique({
+        where: { canonicalUrl: source.canonicalUrl },
+        select: { id: true },
+      }));
+
+    const record = prior
+      ? await prisma.source.update({
+          where: { id: prior.id },
+          data: {
+            title: source.title,
+            publisher: source.publisher,
+            canonicalUrl: canonical.url,
+            region: source.region,
+            topic: source.topic,
+            summary: source.summary,
+            status: "PUBLISHED",
+            reviewedAt: new Date("2026-07-01T00:00:00.000Z"),
+          },
+          select: { id: true },
+        })
+      : await prisma.source.create({
+          data: {
+            title: source.title,
+            publisher: source.publisher,
+            canonicalUrl: canonical.url,
+            region: source.region,
+            topic: source.topic,
+            summary: source.summary,
+            status: "PUBLISHED",
+            reviewedAt: new Date("2026-07-01T00:00:00.000Z"),
+            publishedAt: new Date("2026-07-01T00:00:00.000Z"),
+          },
+          select: { id: true },
+        });
 
     // Replaced wholesale: passage positions shift when text is edited, and a
     // stale chunk would keep being retrieved.
     await prisma.sourceChunk.deleteMany({ where: { sourceId: record.id } });
 
-    const embeddings = await embedder.embed(source.passages);
+    // Uses the same chunker as admin ingestion rather than trusting the array
+    // boundaries above, so the seeded corpus is chunked identically to anything
+    // an admin adds later.
+    const chunks = chunkContent(source.passages.join("\n\n"));
+    const embeddings = await embedder.embed(chunks.map((chunk) => chunk.text));
 
-    for (const [position, text] of source.passages.entries()) {
-      const embedding = embeddings[position];
+    for (const chunk of chunks) {
+      const embedding = embeddings[chunk.position];
       if (!embedding) continue;
 
       const created = await prisma.sourceChunk.create({
         data: {
           sourceId: record.id,
-          position,
-          text,
-          checksum: createHash("sha256").update(text).digest("hex").slice(0, 32),
+          position: chunk.position,
+          text: chunk.text,
+          checksum: chunk.checksum,
           embeddingModel: embedder.model,
         },
         select: { id: true },

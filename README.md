@@ -20,6 +20,11 @@ licensed professional advice.
 >
 > **No AI provider is required to run it.** Without `OPENAI_API_KEY` a deterministic provider is
 > used, so the full pipeline works offline at zero cost. See [The guidance engine](#the-guidance-engine).
+>
+> **Stripe is implemented but unverified.** Checkout, Customer Portal, and webhook handling have
+> never run against Stripe, because no test-mode credentials are configured. Billing degrades
+> cleanly without keys — the upgrade path is disabled and explained rather than failing. Do not
+> treat it as working until `stripe listen` has exercised it.
 
 ---
 
@@ -140,8 +145,8 @@ depends on them tightens them.
 - **Playwright** — `tests/e2e`. Starts its own server (`pnpm dev` locally, `pnpm start` in CI).
   Run `pnpm test:e2e:install` once before the first run.
 
-`tests/e2e/auth-flows.spec.ts` and `tests/e2e/guidance.spec.ts` **require a running, migrated,
-seeded database** — start it with `pnpm db:up && pnpm db:migrate && pnpm db:seed` first. They
+`tests/e2e/auth-flows.spec.ts`, `tests/e2e/guidance.spec.ts`, and `tests/e2e/admin.spec.ts`
+**require a running, migrated, seeded database** — start it with `pnpm db:up && pnpm db:migrate && pnpm db:seed` first. They
 deliberately use no mocks and no injected session: they drive the real sign-in, sign-up,
 onboarding, generation, and planning flows, then assert the resulting rows in PostgreSQL, so a
 flow that renders correctly but persists nothing fails. Accounts are created on `@northstar.test`
@@ -202,6 +207,61 @@ This is how tests and CI run, so no test can quietly spend money.
 With a key set, `openai-provider.ts` uses the Responses API with a strict JSON schema. Its output
 still goes through the same validation, because provider-side schema enforcement cannot check the
 citation allow-list.
+
+## Admin and source ingestion
+
+Only **published** sources are retrievable. Everything the guidance engine can cite passes through
+the admin area first.
+
+### Creating an admin
+
+There is deliberately **no way to become an admin through the application** — sign-up always
+creates a regular user. Create one out-of-band:
+
+```bash
+# In .env, then re-seed. Off by default so a real database is never seeded with
+# an elevated account by accident.
+SEED_ADMIN=true
+pnpm db:seed
+```
+
+That creates `admin@northstar.local` with the same development password as the seeded user
+(printed by the seed command). **These are local development credentials only** — they exist
+solely on a machine that has run the seed, and no credentials are committed to the repository.
+
+To promote an existing account instead:
+
+```sql
+UPDATE users SET role = 'ADMIN' WHERE email = 'you@example.com';
+```
+
+The role is carried in the session token, so **sign out and back in** after promoting an account.
+
+### The source lifecycle
+
+`Draft → Reviewed → Published → Retired`, at `/admin/sources`.
+
+- **Draft** — being prepared. Not retrievable.
+- **Reviewed** — checked by a person. Still not retrievable.
+- **Published** — retrievable by the guidance engine.
+- **Retired** — excluded from new reports, but still resolvable for reports that already cited it.
+
+Publishing requires complete metadata **and** fully embedded passages. A source cannot skip
+review, and a published source cannot go back to draft — the only way out is retirement, because
+reports may already cite it.
+
+Canonical URLs are normalised on save: `https` is forced, `www.`, fragments, and tracking
+parameters are stripped, and query parameters are sorted. Adding the same page twice under
+cosmetic variations is refused with a 409.
+
+Ingested content is treated strictly as **evidence, never instructions** — it is chunked, hashed,
+and embedded, and reaches the model only inside the fenced EVIDENCE block.
+
+Publishing or retiring invalidates the Redis retrieval cache. Redis is optional and fail-open: with
+no `REDIS_URL`, or with Redis down, retrieval simply runs uncached.
+
+Every source mutation writes an append-only `AuditLog` record — visible on the source page and on
+`/admin`.
 
 ## Troubleshooting: port 5432 already in use
 

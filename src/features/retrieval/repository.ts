@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
 import { toVectorLiteral } from "./embedder";
+import { readCachedEvidence, writeCachedEvidence } from "./cache";
 import type { Topic } from "@/features/guidance/types";
 
 /**
@@ -24,6 +25,12 @@ export type RetrievalOptions = {
   /** Cosine similarity floor. Below this a passage is noise, not evidence. */
   minSimilarity?: number;
   limit?: number;
+  /**
+   * The query text, used only to build a cache key. Retrieval itself works from
+   * the embedding; without this the lookup simply runs uncached.
+   */
+  cacheKeyQuery?: string;
+  embeddingModel?: string;
 };
 
 const DEFAULT_LIMIT = 8;
@@ -55,6 +62,27 @@ export async function retrieveEvidence(
   const minSimilarity = options.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
   const literal = toVectorLiteral(queryEmbedding);
 
+  // Corpus lookups only — a personalized report is never cached under a shared
+  // key (spec section 9). Cached entries are scoped to a generation counter that
+  // an admin publish or retirement bumps, so a retired source cannot survive in
+  // a cached result.
+  const cacheParts =
+    options.cacheKeyQuery && options.embeddingModel
+      ? {
+          query: options.cacheKeyQuery,
+          topic: options.topic,
+          region: options.region,
+          embeddingModel: options.embeddingModel,
+          limit,
+          minSimilarity,
+        }
+      : null;
+
+  if (cacheParts) {
+    const cached = await readCachedEvidence(cacheParts);
+    if (cached) return cached;
+  }
+
   // Region is matched loosely: a national source is relevant to every province,
   // so "Canada" must not be filtered out by a request from "Toronto, Ontario".
   const rows = await prisma.$queryRaw<Row[]>`
@@ -82,7 +110,7 @@ export async function retrieveEvidence(
      LIMIT ${limit}
   `;
 
-  return rows
+  const evidence = rows
     .map((row) => ({
       sourceId: row.sourceId,
       chunkId: row.chunkId,
@@ -95,6 +123,10 @@ export async function retrieveEvidence(
       similarity: 1 - Number(row.distance),
     }))
     .filter((chunk) => chunk.similarity >= minSimilarity);
+
+  if (cacheParts) await writeCachedEvidence(cacheParts, evidence);
+
+  return evidence;
 }
 
 /** The allow-list a generated citation is checked against. */

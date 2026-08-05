@@ -117,3 +117,120 @@ export async function deleteTestUsers(): Promise<number> {
     return result.rowCount ?? 0;
   });
 }
+
+// ---------------------------------------------------------------------------
+// Admin / source helpers
+// ---------------------------------------------------------------------------
+
+/** Sources created by tests live on this host so teardown can find them. */
+export const TEST_SOURCE_HOST = "sources.northstar.test";
+
+export function uniqueSourceUrl(prefix = "src"): string {
+  const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `https://${TEST_SOURCE_HOST}/${prefix}-${nonce}`;
+}
+
+/**
+ * Promotes an existing account to ADMIN.
+ *
+ * Sign-up always creates a USER — there is deliberately no way to self-elevate
+ * through the application — so a test admin is made here, directly in the
+ * database, exactly as the documented `SEED_ADMIN` flag does.
+ */
+export async function promoteToAdmin(email: string): Promise<void> {
+  await withClient(async (client) => {
+    await client.query(`UPDATE users SET role = 'ADMIN' WHERE email = $1`, [email]);
+  });
+}
+
+export type TestSource = {
+  id: string;
+  title: string;
+  status: string;
+  canonicalUrl: string;
+  summary: string | null;
+  chunkCount: number;
+  embeddedCount: number;
+};
+
+export async function getSourceByUrl(canonicalUrl: string): Promise<TestSource | null> {
+  return withClient(async (client) => {
+    const rows = await client.query<{
+      id: string;
+      title: string;
+      status: string;
+      canonicalUrl: string;
+      summary: string | null;
+    }>(`SELECT id, title, status, "canonicalUrl", summary FROM sources WHERE "canonicalUrl" = $1`, [
+      canonicalUrl,
+    ]);
+
+    const source = rows.rows[0];
+    if (!source) return null;
+
+    const counts = await client.query<{ total: string; embedded: string }>(
+      `SELECT count(*)::text AS total,
+              count(embedding)::text AS embedded
+         FROM source_chunks WHERE "sourceId" = $1`,
+      [source.id],
+    );
+
+    return {
+      ...source,
+      chunkCount: Number(counts.rows[0]?.total ?? 0),
+      embeddedCount: Number(counts.rows[0]?.embedded ?? 0),
+    };
+  });
+}
+
+export async function getAuditActions(sourceId: string): Promise<string[]> {
+  return withClient(async (client) => {
+    const rows = await client.query<{ action: string }>(
+      `SELECT action FROM audit_logs
+        WHERE "entityType" = 'Source' AND "entityId" = $1
+        ORDER BY "createdAt" ASC`,
+      [sourceId],
+    );
+    return rows.rows.map((row) => row.action);
+  });
+}
+
+/** True when the source would be returned by the retrieval query's filters. */
+export async function isSourceRetrievable(sourceId: string): Promise<boolean> {
+  return withClient(async (client) => {
+    const rows = await client.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM source_chunks c
+         JOIN sources s ON s.id = c."sourceId"
+        WHERE s.id = $1
+          AND s.status = 'PUBLISHED'
+          AND s."deletedAt" IS NULL
+          AND c.embedding IS NOT NULL`,
+      [sourceId],
+    );
+    return Number(rows.rows[0]?.count ?? 0) > 0;
+  });
+}
+
+/** Removes sources the suite created, and their audit trail. */
+export async function deleteTestSources(): Promise<number> {
+  return withClient(async (client) => {
+    const ids = await client.query<{ id: string }>(
+      `SELECT id FROM sources WHERE "canonicalUrl" LIKE $1`,
+      [`https://${TEST_SOURCE_HOST}/%`],
+    );
+
+    for (const row of ids.rows) {
+      // Audit rows have no FK to Source, so they are cleaned explicitly.
+      await client.query(
+        `DELETE FROM audit_logs WHERE "entityType" = 'Source' AND "entityId" = $1`,
+        [row.id],
+      );
+    }
+
+    const result = await client.query(`DELETE FROM sources WHERE "canonicalUrl" LIKE $1`, [
+      `https://${TEST_SOURCE_HOST}/%`,
+    ]);
+    return result.rowCount ?? 0;
+  });
+}

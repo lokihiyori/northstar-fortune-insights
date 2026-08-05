@@ -49,6 +49,7 @@ model User {
   feedback     Feedback[]
   subscription Subscription?
   events       AnalyticsEvent[]
+  auditLogs    AuditLog[]
 
   @@index([createdAt])
   @@map("users")
@@ -660,6 +661,48 @@ model AnalyticsEvent {
   @@index([eventName, createdAt])
   @@index([userId, createdAt])
   @@map("analytics_events")
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail — spec section 10.
+// ---------------------------------------------------------------------------
+
+enum AuditAction {
+  SOURCE_CREATED
+  SOURCE_UPDATED
+  SOURCE_REVIEWED
+  SOURCE_PUBLISHED
+  SOURCE_RETIRED
+  SOURCE_REINSTATED
+  SOURCE_INGESTED
+}
+
+/// Append-only. There is deliberately no update or delete path in the
+/// application: an audit record that can be rewritten is not an audit record.
+model AuditLog {
+  id String @id @default(cuid())
+
+  /// Nullable so history survives the actor's account being deleted — the
+  /// record of what happened must outlive who did it.
+  actorId    String?
+  actorEmail String?
+
+  action     AuditAction
+  entityType String
+  entityId   String
+
+  /// Safe metadata only: field names, status transitions, counts. Never
+  /// secrets, prompts, or personal information beyond the acting admin.
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
 }
 
 model PromptVersion {

@@ -89,6 +89,10 @@ export async function runGuidancePipeline(
       evidence = await retrieveEvidence(queryEmbedding, {
         topic: input.topic,
         region: input.includeProfile ? input.profile.region : null,
+        // Enables the corpus cache. The key is a hash, so the question text is
+        // not held in the Redis keyspace.
+        cacheKeyQuery: input.question,
+        embeddingModel: embedder.model,
       });
     }
 
