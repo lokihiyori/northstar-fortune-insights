@@ -59,11 +59,13 @@ export function ButtonLink({
   className,
   onClick,
   children,
-}: CommonProps & { href: string; onClick?: () => void }) {
+}: CommonProps & { href: string; onClick?: (() => void) | undefined }) {
   return (
     <Link
       href={href}
-      onClick={onClick}
+      // Spread conditionally: `exactOptionalPropertyTypes` rejects an explicit
+      // undefined for Link's onClick.
+      {...(onClick ? { onClick } : {})}
       className={cn(BASE, VARIANTS[variant], SIZES[size], className)}
     >
       {children}

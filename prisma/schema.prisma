@@ -1,9 +1,7 @@
 // NorthStar Fortune Insights — Prisma schema
 //
-// Phase 0 scope: only enough of the model to prove the migrate/generate/seed
-// workflow end to end. The full data model (spec section 10) lands with the
-// phase that owns each entity. `User` here is a deliberate placeholder — Phase 2
-// extends it to the Auth.js adapter shape and adds Account/Session/VerificationToken.
+// Phase 2 scope: authentication and the compass profile. The guidance, plan,
+// billing, and source entities from spec section 10 arrive with their own phases.
 
 generator client {
   provider = "prisma-client"
@@ -20,15 +18,177 @@ enum UserRole {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  role      UserRole @default(USER)
-  locale    String   @default("en-CA")
-  timezone  String   @default("America/Toronto")
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  image         String?
+  role          UserRole  @default(USER)
+  locale        String    @default("en-CA")
+  timezone      String    @default("America/Toronto")
+
+  // Null for accounts created through OAuth only. Never selected into a session
+  // or an API response — see src/features/auth/password.ts.
+  passwordHash String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  accounts    Account[]
+  sessions    Session[]
+  profile     UserProfile?
+  priorities  UserPriority[]
+  constraints UserConstraint[]
+
   @@index([createdAt])
   @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Auth.js adapter models. Field names are fixed by @auth/prisma-adapter and
+// must not be renamed, including the snake_case OAuth token fields.
+// ---------------------------------------------------------------------------
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+// Retained although the credentials provider forces the JWT strategy (ADR 0006).
+// Keeping the table means switching to database sessions later is a config
+// change rather than a migration.
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Compass profile — spec section 4, "Build your compass".
+// ---------------------------------------------------------------------------
+
+enum CareerStage {
+  STUDENT
+  RECENT_GRADUATE
+  EARLY_CAREER
+  MID_CAREER
+  SENIOR
+  CAREER_CHANGE
+  RETURNING
+}
+
+enum GoalTimeframe {
+  WITHIN_3_MONTHS
+  WITHIN_6_MONTHS
+  WITHIN_1_YEAR
+  WITHIN_2_YEARS
+  EXPLORING
+}
+
+enum PriorityKey {
+  INCOME
+  STABILITY
+  FLEXIBILITY
+  LEARNING
+  IMPACT
+  LOCATION
+  SPEED
+}
+
+enum ConstraintType {
+  TIME
+  BUDGET
+  WORK_AUTHORIZATION
+  RESPONSIBILITIES
+  ACCESSIBILITY
+  OTHER
+}
+
+model UserProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  // Every field is optional: onboarding is skippable step by step, and a
+  // half-finished profile must still persist so it can be resumed.
+  region       String?
+  careerStage  CareerStage?
+  currentRole  String?
+  primaryGoal  String?
+  timeframe    GoalTimeframe?
+  notes        String?
+
+  // Highest step index the user has completed (0 = none). Drives resumption.
+  onboardingStep        Int       @default(0)
+  onboardingCompletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model UserPriority {
+  id     String      @id @default(cuid())
+  userId String
+  key    PriorityKey
+  rank   Int
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // A user ranks each priority at most once, and no two share a rank.
+  @@unique([userId, key])
+  @@unique([userId, rank])
+  @@map("user_priorities")
+}
+
+model UserConstraint {
+  id               String         @id @default(cuid())
+  userId           String
+  type             ConstraintType
+  value            String
+  isHardConstraint Boolean        @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_constraints")
 }

@@ -1,0 +1,81 @@
+import { randomUUID } from "node:crypto";
+import { NextResponse } from "next/server";
+import type { z } from "zod";
+
+/** Spec section 11: the only two response shapes a v1 endpoint may return. */
+export type ApiSuccess<T> = {
+  data: T;
+  meta?: Record<string, unknown>;
+};
+
+export type ApiError = {
+  error: {
+    code: string;
+    message: string;
+    fieldErrors?: Record<string, string[]>;
+    requestId: string;
+  };
+};
+
+export const ERROR_CODES = {
+  UNAUTHENTICATED: "UNAUTHENTICATED",
+  FORBIDDEN: "FORBIDDEN",
+  NOT_FOUND: "NOT_FOUND",
+  VALIDATION_FAILED: "VALIDATION_FAILED",
+  CONFLICT: "CONFLICT",
+  RATE_LIMITED: "RATE_LIMITED",
+  INTERNAL: "INTERNAL",
+} as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
+
+const STATUS: Record<ErrorCode, number> = {
+  UNAUTHENTICATED: 401,
+  FORBIDDEN: 403,
+  NOT_FOUND: 404,
+  VALIDATION_FAILED: 422,
+  CONFLICT: 409,
+  RATE_LIMITED: 429,
+  INTERNAL: 500,
+};
+
+export function apiSuccess<T>(
+  data: T,
+  init?: { status?: number; meta?: Record<string, unknown> },
+): NextResponse<ApiSuccess<T>> {
+  const body: ApiSuccess<T> = init?.meta ? { data, meta: init.meta } : { data };
+  return NextResponse.json(body, { status: init?.status ?? 200 });
+}
+
+export function apiError(
+  code: ErrorCode,
+  message: string,
+  init?: { fieldErrors?: Record<string, string[]>; status?: number },
+): NextResponse<ApiError> {
+  // A request id lets a user quote a failure without us logging their content.
+  const requestId = randomUUID();
+
+  return NextResponse.json(
+    {
+      error: {
+        code,
+        message,
+        ...(init?.fieldErrors ? { fieldErrors: init.fieldErrors } : {}),
+        requestId,
+      },
+    },
+    { status: init?.status ?? STATUS[code] },
+  );
+}
+
+/** Flatten a Zod error into the `fieldErrors` shape the API contract defines. */
+export function fieldErrorsFrom(error: z.ZodError): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+
+  for (const issue of error.issues) {
+    const key = issue.path.join(".") || "_";
+    (result[key] ??= []).push(issue.message);
+  }
+
+  return result;
+}

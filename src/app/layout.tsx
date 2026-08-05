@@ -39,7 +39,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     // next-themes writes the theme class here before paint; without
     // suppressHydrationWarning React flags the server/client class mismatch.
-    <html lang="en" suppressHydrationWarning className={`${inter.variable} ${manrope.variable}`}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      // Tells Next the smooth scroll in globals.css is deliberate, so it does
+      // not warn about route transitions animating.
+      data-scroll-behavior="smooth"
+      className={`${inter.variable} ${manrope.variable}`}
+    >
       <body>
         <ThemeProvider>{children}</ThemeProvider>
       </body>

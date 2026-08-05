@@ -9,9 +9,14 @@ assumptions and trade-offs it carries, and what to do next.
 It is decision support, not fortune-telling. It does not predict outcomes and does not replace
 licensed professional advice.
 
-> **Status: Phase 0 — foundation.** The repository, tooling, local infrastructure, and CI are in
-> place. The marketing site, product workspace, and guidance engine arrive in Phases 1–8. See
+> **Status: Phases 0–2 complete.** Repository and tooling; the Quiet Aurora design system and
+> full marketing site; authentication and the Build-your-compass onboarding. The guidance
+> workspace and engine arrive in Phases 3–4. See
 > [`docs/NORTHSTAR_BUILD_SPEC.md`](docs/NORTHSTAR_BUILD_SPEC.md) section 18 for the phase plan.
+>
+> **Not yet verified against a live database.** Docker was unavailable on the machine this was
+> built on, so no migration has been applied and the seed has never run. See
+> [Known gaps](#known-gaps).
 
 ---
 
@@ -131,6 +136,44 @@ depends on them tightens them.
 
 The AI layer is mocked in ordinary tests. Real-provider evaluation is a separate, explicit command
 with a cost limit (spec section 16) and arrives with Phase 4.
+
+## Authentication
+
+Email/password plus optional Google, via Auth.js v5. Two decisions are worth reading before
+touching this area:
+
+- **Auth.js is pinned to an exact beta version** ([ADR 0005](docs/adr/0005-authjs-v5-beta.md)).
+  Do not widen it to a caret range.
+- **Sessions are JWT, and the proxy is not the security boundary**
+  ([ADR 0006](docs/adr/0006-jwt-sessions-and-layered-authorization.md)). Every protected
+  layout, page, and Route Handler calls a guard from `src/features/auth/guards.ts` itself.
+
+Passwords use scrypt from `node:crypto` — no native dependency, and the work factor is stored
+in each hash so it can be raised later without invalidating existing passwords.
+
+`AUTH_SECRET` is required. Generate one with `npx auth secret`. Google is optional locally; the
+button is hidden when its credentials are unset.
+
+After seeding, sign in as `dev@northstar.local` with password `northstar-dev-password`.
+
+## Known gaps
+
+Honest status of what has and has not been exercised:
+
+- **No migration has ever been applied.** `prisma/migrations/20260804000000_init_auth_and_profile`
+  was generated offline with `prisma migrate diff` because Docker was not available. The schema
+  validates and the client generates, but the SQL is unverified against a running PostgreSQL.
+- **The seed has never run**, so no sign-in, sign-up, or onboarding flow has been executed
+  end to end against real data.
+- Tests that need a database are therefore absent. The e2e suite covers what can be checked
+  without one: unauthenticated redirects, the API error envelope, callback-URL handling, and
+  marketing navigation.
+
+Closing these is the first task before Phase 3:
+
+```bash
+pnpm db:up && pnpm db:migrate && pnpm db:seed
+```
 
 ## License
 

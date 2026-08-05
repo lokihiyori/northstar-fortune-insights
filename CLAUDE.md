@@ -73,7 +73,23 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 
 `pnpm verify` runs all of the above plus `build` in one pass.
 
+## Authentication
+
+- Auth.js v5 is pinned to an exact beta version (ADR 0005). Never widen it to a caret range.
+- Sessions are JWT, forced by the credentials provider (ADR 0006).
+- `src/proxy.ts` is a fast redirect, not the security boundary. Every protected layout, page,
+  and Route Handler calls a guard from `src/features/auth/guards.ts` itself.
+- The role in a token is a hint. Re-read it from the database for any privileged operation.
+- Passwords use scrypt from `node:crypto` (`src/features/auth/password.ts`). The work factor
+  is stored in each hash so it can be raised without invalidating existing passwords.
+
 ## Current phase
 
-**Phase 0 complete** — repository, tooling, local infrastructure, and CI.
-Next: Phase 1 (design system and marketing site). Do not begin future phases without approval.
+**Phases 0–2 complete** — repository and tooling; Quiet Aurora design system and marketing
+site; authentication and the Build-your-compass onboarding.
+Next: Phase 3 (dashboard and static report experience, on typed fixtures, before any AI).
+Do not begin future phases without approval.
+
+**Blocked:** Docker is not installed on the development machine, so no migration has ever been
+applied and the seed has never run. `prisma/migrations/20260804000000_init_auth_and_profile`
+was generated offline with `prisma migrate diff` and is unverified against a live database.
