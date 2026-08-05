@@ -75,7 +75,8 @@ It is off by default so a real database can never be seeded with an elevated acc
 | `pnpm format:check`     | Verify formatting (CI)                              |
 | `pnpm lint`             | ESLint                                              |
 | `pnpm typecheck`        | `tsc --noEmit`                                      |
-| `pnpm test`             | Unit and integration tests (Vitest)                 |
+| `pnpm test`             | Unit tests (Vitest) — no database required          |
+| `pnpm test:integration` | Integration tests — **requires PostgreSQL + Redis** |
 | `pnpm test:watch`       | Vitest in watch mode                                |
 | `pnpm test:coverage`    | Vitest with a V8 coverage report                    |
 | `pnpm test:e2e`         | Playwright end-to-end tests (starts its own server) |
@@ -142,6 +143,18 @@ depends on them tightens them.
 
 - **Vitest + React Testing Library** — `tests/unit`, `tests/integration`. Vitest is scoped to those
   directories so it never picks up Playwright specs.
+
+  `pnpm test` runs **only** `tests/unit`, which need no services, so `pnpm verify` stays runnable
+  on a bare checkout. `pnpm test:integration` runs `tests/integration`, which talk to real
+  PostgreSQL **and real Redis**.
+
+  `tests/integration/retrieval-cache.test.ts` proves warm-cache invalidation end to end: it
+  publishes a source, populates the cache through the real `retrieveEvidence` service, retires the
+  source through the real lifecycle service, and shows the retired source is no longer returned —
+  while the previous cache entry is _still physically present in Redis and still contains it_. That
+  rules out expiry or key deletion as the explanation, leaving only the generation bump. Deleting
+  the `invalidateRetrievalCache()` call makes this test fail.
+
 - **Playwright** — `tests/e2e`. Starts its own server (`pnpm dev` locally, `pnpm start` in CI).
   Run `pnpm test:e2e:install` once before the first run.
 

@@ -221,6 +221,10 @@ export async function transitionSource(
 
   // Publishing adds to the retrievable corpus; retiring removes from it. Either
   // way every cached result is now potentially wrong.
+  //
+  // Verified by tests/integration/retrieval-cache.test.ts: removing this line
+  // makes that test fail, because the warm entry keeps serving the retired
+  // source.
   if (to === "PUBLISHED" || from === "PUBLISHED") await invalidateRetrievalCache();
 
   return { ok: true, value: { status: to } };

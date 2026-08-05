@@ -68,7 +68,9 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - `pnpm format:check`
 - `pnpm lint`
 - `pnpm typecheck`
-- `pnpm test`
+- `pnpm test` — unit only, no services needed, so `verify` runs on a bare checkout.
+- `pnpm test:integration` — needs PostgreSQL **and Redis**. Run it when retrieval, caching, or the
+  source lifecycle changes.
 - Run `pnpm test:e2e` when a critical user flow changes.
 
 `pnpm verify` runs all of the above plus `build` in one pass.
