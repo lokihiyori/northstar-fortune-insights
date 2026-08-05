@@ -1,7 +1,10 @@
 // NorthStar Fortune Insights — Prisma schema
 //
-// Phase 2 scope: authentication and the compass profile. The guidance, plan,
-// billing, and source entities from spec section 10 arrive with their own phases.
+// Phases 2–4: authentication and the compass profile, plus the guidance engine —
+// sources and their embedded chunks, guidance requests, versioned reports with
+// paths and citations, action plans, and the usage ledger.
+//
+// Billing (Stripe) and analytics entities from spec section 10 arrive with Phase 6.
 
 generator client {
   provider = "prisma-client"
@@ -39,6 +42,11 @@ model User {
   profile     UserProfile?
   priorities  UserPriority[]
   constraints UserConstraint[]
+  requests    GuidanceRequest[]
+  reports     GuidanceReport[]
+  plans       ActionPlan[]
+  usage       UsageLedger[]
+  feedback    Feedback[]
 
   @@index([createdAt])
   @@map("users")
@@ -191,4 +199,396 @@ model UserConstraint {
 
   @@index([userId])
   @@map("user_constraints")
+}
+
+// ---------------------------------------------------------------------------
+// Retrieval corpus — spec section 9.
+// ---------------------------------------------------------------------------
+
+enum GuidanceTopic {
+  CAREER
+  EDUCATION
+  RELOCATION
+  PERSONAL_GOAL
+}
+
+enum SourceStatus {
+  DRAFT
+  REVIEWED
+  PUBLISHED
+  RETIRED
+}
+
+model Source {
+  id           String        @id @default(cuid())
+  title        String
+  publisher    String
+  canonicalUrl String
+  region       String
+  topic        GuidanceTopic
+  status       SourceStatus  @default(DRAFT)
+  summary      String?
+  publishedAt  DateTime?
+  reviewedAt   DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  // Soft deletion: a retired or removed source must remain resolvable for
+  // reports that already cited it.
+  deletedAt DateTime?
+
+  chunks    SourceChunk[]
+  citations Citation[]
+
+  @@unique([canonicalUrl])
+  // Retrieval always filters on all three together.
+  @@index([status, topic, region])
+  @@map("sources")
+}
+
+model SourceChunk {
+  id       String @id @default(cuid())
+  sourceId String
+  position Int
+  text     String
+
+  /// Detects upstream edits without re-embedding identical text.
+  checksum       String
+  embeddingModel String
+
+  /// pgvector column. 1536 matches OpenAI text-embedding-3-small; the
+  /// deterministic development embedder produces the same width so the two are
+  /// interchangeable without a migration.
+  embedding Unsupported("vector(1536)")?
+
+  createdAt DateTime @default(now())
+
+  source    Source     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  citations Citation[]
+
+  @@unique([sourceId, position])
+  @@index([sourceId])
+  // No ANN index here on purpose. Prisma 7 has no `Hnsw` index type, so any
+  // hand-written vector index is invisible to it and shows up as permanent
+  // drift — `migrate dev` then tries to drop it on every run. Retrieval uses an
+  // exact cosine scan instead, which is correct and fast at this corpus size.
+  // See docs/adr/0003-postgresql-with-prisma.md.
+  @@map("source_chunks")
+}
+
+// ---------------------------------------------------------------------------
+// Guidance requests and versioned reports — spec sections 9 and 10.
+// ---------------------------------------------------------------------------
+
+enum RequestStatus {
+  PENDING
+  RUNNING
+  READY
+  FAILED
+}
+
+enum ConfidenceBasis {
+  HIGH_EVIDENCE
+  MISSING_INFORMATION
+  EXPLORATORY
+}
+
+enum PathLabel {
+  BEST_FIT
+  LOWER_RISK
+  GROWTH
+}
+
+enum FitLevel {
+  STRONG
+  MODERATE
+  EXPLORATORY
+}
+
+enum ReasonType {
+  RATIONALE
+  ASSUMPTION
+  TRADEOFF
+  CHANGE_CONDITION
+}
+
+model GuidanceRequest {
+  id     String        @id @default(cuid())
+  userId String
+  topic  GuidanceTopic
+  question String
+  status RequestStatus @default(PENDING)
+
+  /// Immutable snapshot of profile, criteria, and constraints as they were when
+  /// the request ran, so a later report version can be compared against it.
+  inputSnapshot Json
+
+  /// Which named stage the client should display. Never a percentage.
+  stageIndex    Int     @default(0)
+  errorCode     String?
+  errorMessage  String?
+  promptVersion String
+
+  /// Client-generated; makes a retried submission return the original request
+  /// instead of creating a second one.
+  idempotencyKey String
+
+  latencyMs   Int?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reports GuidanceReport[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("guidance_requests")
+}
+
+model GuidanceReport {
+  id        String @id @default(cuid())
+  requestId String
+  userId    String
+  version   Int    @default(1)
+
+  title               String
+  questionRestatement String
+  summary             String
+  disclaimer          String
+
+  confidenceBasis    ConfidenceBasis
+  confidenceReasons  String[]
+  missingInformation String[]
+
+  /// Which retrieved chunks were offered to the model for this version.
+  evidenceSnapshot Json
+
+  modelName     String
+  promptVersion String
+
+  createdAt  DateTime  @default(now())
+  archivedAt DateTime?
+  deletedAt  DateTime?
+
+  request  GuidanceRequest      @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paths    RecommendationPath[]
+  plans    ActionPlan[]
+  feedback Feedback[]
+
+  @@unique([requestId, version])
+  @@index([userId, createdAt])
+  @@map("guidance_reports")
+}
+
+model RecommendationPath {
+  id           String    @id @default(cuid())
+  reportId     String
+  label        PathLabel
+  title        String
+  fit          FitLevel
+  timeHorizon  String
+  mainTradeoff String
+  position     Int
+
+  report    GuidanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  reasons   PathReason[]
+  actions   PathAction[]
+  citations Citation[]
+  plans     ActionPlan[]
+
+  @@unique([reportId, label])
+  @@index([reportId])
+  @@map("recommendation_paths")
+}
+
+model PathReason {
+  id       String     @id @default(cuid())
+  pathId   String
+  type     ReasonType
+  body     String
+  position Int
+
+  path RecommendationPath @relation(fields: [pathId], references: [id], onDelete: Cascade)
+
+  @@index([pathId, type])
+  @@map("path_reasons")
+}
+
+model PathAction {
+  id          String @id @default(cuid())
+  pathId      String
+  title       String
+  description String
+  targetDays  Int
+  position    Int
+
+  path RecommendationPath @relation(fields: [pathId], references: [id], onDelete: Cascade)
+
+  @@index([pathId])
+  @@map("path_actions")
+}
+
+model Citation {
+  id       String @id @default(cuid())
+  pathId   String
+  sourceId String
+  chunkId  String?
+  claim    String
+  position Int
+
+  path  RecommendationPath @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  // Restrict, not cascade: deleting a source must never silently strip the
+  // evidence out of a report a user has already read.
+  source Source            @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  chunk  SourceChunk?      @relation(fields: [chunkId], references: [id], onDelete: SetNull)
+
+  @@index([pathId])
+  @@index([sourceId])
+  @@map("citations")
+}
+
+// ---------------------------------------------------------------------------
+// Action plans — the UI lands in Phase 3; Phase 5 extends check-ins and history.
+// ---------------------------------------------------------------------------
+
+enum PlanStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum PlanTaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  BLOCKED
+}
+
+model ActionPlan {
+  id       String @id @default(cuid())
+  userId   String
+  reportId String
+  pathId   String
+
+  title          String
+  desiredOutcome String
+  status         PlanStatus @default(ACTIVE)
+  targetDate     DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  report   GuidanceReport     @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  path     RecommendationPath @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  tasks    PlanTask[]
+  checkIns PlanCheckIn[]
+
+  // One plan per path: converting the same path twice is a mistake, not intent.
+  @@unique([userId, pathId])
+  @@index([userId, status])
+  @@map("action_plans")
+}
+
+model PlanTask {
+  id          String         @id @default(cuid())
+  planId      String
+  title       String
+  description String
+  status      PlanTaskStatus @default(TODO)
+
+  /// 30, 60, or 90-day horizon (spec section 5.7).
+  milestone Int
+  dueDate   DateTime?
+  notes     String?
+  position  Int
+
+  relatedSourceId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plan ActionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId, milestone])
+  @@map("plan_tasks")
+}
+
+model PlanCheckIn {
+  id             String  @id @default(cuid())
+  planId         String
+  note           String
+  changedContext String?
+
+  createdAt DateTime @default(now())
+
+  plan ActionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId, createdAt])
+  @@map("plan_check_ins")
+}
+
+// ---------------------------------------------------------------------------
+// Feedback, metering, and prompt provenance.
+// ---------------------------------------------------------------------------
+
+enum FeedbackRating {
+  USEFUL
+  PARTLY_USEFUL
+  NOT_USEFUL
+}
+
+model Feedback {
+  id       String         @id @default(cuid())
+  userId   String
+  reportId String
+  rating   FeedbackRating
+  tags     String[]
+  comment  String?
+
+  createdAt DateTime @default(now())
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  report GuidanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, reportId])
+  @@index([reportId])
+  @@map("feedback")
+}
+
+model UsageLedger {
+  id      String @id @default(cuid())
+  userId  String
+  feature String
+  units   Int    @default(1)
+
+  /// "YYYY-MM" — the window an allowance is counted against.
+  periodKey String
+  requestId String?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // A request may only ever consume its allowance once, however many times the
+  // pipeline is retried.
+  @@unique([userId, requestId, feature])
+  @@index([userId, periodKey, feature])
+  @@map("usage_ledger")
+}
+
+model PromptVersion {
+  id           String   @id @default(cuid())
+  name         String
+  version      Int
+  templateHash String
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+
+  @@unique([name, version])
+  @@map("prompt_versions")
 }

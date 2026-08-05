@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { hashPassword } from "../src/features/auth/password";
+import { SEED_SOURCE_COUNT, seedSources } from "./seed-sources";
 
 const connectionString = process.env["DATABASE_URL"];
 if (!connectionString) {
@@ -54,6 +55,11 @@ async function main() {
   } else {
     console.log("Skipped admin seed (set SEED_ADMIN=true to create one locally)");
   }
+
+  // The reviewed corpus retrieval draws on. Without it every generated report
+  // would be exploratory, because nothing could be cited.
+  const chunks = await seedSources(prisma);
+  console.log(`Seeded ${String(SEED_SOURCE_COUNT)} published sources (${String(chunks)} passages)`);
 }
 
 main()

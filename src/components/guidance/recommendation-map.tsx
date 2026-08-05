@@ -4,7 +4,13 @@ import { useId, useRef, useState } from "react";
 import { FitIndicator } from "@/components/guidance/fit-indicator";
 import { PathDetail } from "@/components/guidance/path-detail";
 import { cn } from "@/lib/cn";
-import { PATH_LABEL_COPY, type SampleReport } from "@/features/guidance/types";
+import { PATH_LABEL_COPY, type RecommendationPath } from "@/features/guidance/types";
+
+/** Narrowed on purpose: marketing samples and real reports both satisfy it. */
+export type RecommendationMapReport = {
+  question: string;
+  paths: readonly RecommendationPath[];
+};
 
 /**
  * The signature element from spec section 2.
@@ -19,7 +25,7 @@ import { PATH_LABEL_COPY, type SampleReport } from "@/features/guidance/types";
  * On mobile the same tablist collapses to a horizontally scrolling segmented
  * control, so no separate carousel implementation is needed.
  */
-export function RecommendationMap({ report }: { report: SampleReport }) {
+export function RecommendationMap({ report }: { report: RecommendationMapReport }) {
   const baseId = useId();
   const [selectedId, setSelectedId] = useState(report.paths[0]?.id ?? "");
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});

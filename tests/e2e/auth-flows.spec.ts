@@ -149,9 +149,10 @@ test("completes onboarding across all four steps and persists every answer", asy
   await page.getByLabel("Work authorization").fill("Canadian citizen");
   await page.getByRole("button", { name: "Finish" }).click();
 
-  // Finishing returns to the dashboard.
+  // Finishing returns to the dashboard, which no longer prompts to finish setup.
   await page.waitForURL(/\/app$/);
-  await expect(page.getByText("Your compass is set")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Welcome back");
+  await expect(page.getByText("Finish building your compass")).toHaveCount(0);
 
   // Everything must actually be in PostgreSQL.
   const user = await getUserByEmail(email);

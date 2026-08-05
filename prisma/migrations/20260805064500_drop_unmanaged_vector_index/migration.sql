@@ -1,0 +1,16 @@
+-- Drop the HNSW index added by 20260805050000_source_chunk_vector_index.
+--
+-- Prisma 7 has no `Hnsw` index type, so the index cannot be declared in
+-- schema.prisma. Prisma diffs the live database against the schema, so an index
+-- it cannot represent is permanent drift: every `prisma migrate dev` generates a
+-- DROP for it and — with no `--name` — blocks on an interactive prompt, which
+-- hangs outright in a non-interactive shell.
+--
+-- Retrieval therefore uses an exact cosine scan. That is not a downgrade at this
+-- corpus size: exact search has perfect recall, where HNSW is approximate. When
+-- the corpus is large enough to need an ANN index, add it as an operational step
+-- outside Prisma's managed schema and pin the migration workflow accordingly.
+--
+-- Forward-only rather than editing the earlier migration, whose checksum is
+-- already recorded.
+DROP INDEX IF EXISTS "source_chunks_embedding_hnsw";

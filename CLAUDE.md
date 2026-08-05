@@ -93,12 +93,30 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
   drive both the published ports and the connection strings from one place.
 - Connection strings use `127.0.0.1`, not `localhost`, to avoid IPv6-first resolution.
 
+## Guidance engine (Phase 4)
+
+- The pipeline lives in `src/features/guidance/orchestrator.ts` and follows spec section 9.
+  Deterministic code owns rules, retrieval, validation, and persistence; the model is one step
+  in the middle and its output is untrusted until it passes both gates.
+- **Two validation gates, in order:** the strict Zod schema, then the citation allow-list. An
+  unknown `sourceId` fails the whole report. Never repair malformed output — reject it.
+- Providers sit behind `GuidanceProvider`. `src/features/guidance/ai/openai-provider.ts` is the
+  only file that knows OpenAI exists. Without `OPENAI_API_KEY` the deterministic provider is
+  selected, so everything runs offline at no cost — that is the default for tests and CI.
+- Confidence is derived from rules and evidence count, never asserted by the model, and never
+  rendered without its reasons.
+- Retrieval is restricted to `PUBLISHED`, non-deleted sources filtered by topic and region
+  before ranking. Exact cosine scan, no ANN index — see ADR 0003.
+- Usage is charged only on success, and the ledger's unique constraint makes it idempotent.
+
 ## Current phase
 
-**Phases 0–2 complete and verified against a live database** — repository and tooling; Quiet
-Aurora design system and marketing site; authentication and the Build-your-compass onboarding.
-The migration is applied, the seed runs, and the authentication and onboarding flows are covered
-by Playwright tests that execute against real PostgreSQL (`tests/e2e/auth-flows.spec.ts`).
+**Phases 0–4 complete and verified against a live database.** Repository and tooling; Quiet
+Aurora design system and marketing site; authentication and onboarding; the app workspace
+(composer, report, compare, plan, history); and the guidance engine with rules, retrieval,
+structured generation, and citation validation.
 
-Next: Phase 3 (dashboard and static report experience, on typed fixtures, before any AI).
-Do not begin future phases without approval.
+`tests/e2e/guidance.spec.ts` drives the whole pipeline against real PostgreSQL — no mocks.
+
+Next: Phase 5 (action planning, feedback, and report versioning). Do not begin future phases
+without approval.

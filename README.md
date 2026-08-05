@@ -9,13 +9,17 @@ assumptions and trade-offs it carries, and what to do next.
 It is decision support, not fortune-telling. It does not predict outcomes and does not replace
 licensed professional advice.
 
-> **Status: Phases 0–2 complete and verified against a live database.** Repository and tooling;
+> **Status: Phases 0–4 complete and verified against a live database.** Repository and tooling;
 > the Quiet Aurora design system and full marketing site; authentication and the
-> Build-your-compass onboarding. The migration has been applied to PostgreSQL 17, the seed has
-> run, and the sign-in, sign-up, sign-out, protected-route, callback-redirect, and onboarding
-> flows are covered by Playwright tests that execute against the real database. The guidance
-> workspace and engine arrive in Phases 3–4. See
+> Build-your-compass onboarding; the app workspace (guided composer, insight report, scenario
+> comparison, action plans, history); and the guidance engine — deterministic rules, pgvector
+> retrieval over a reviewed corpus, structured generation behind a provider interface, and
+> citation validation. Every flow is covered by Playwright tests that run against real
+> PostgreSQL with no mocks. See
 > [`docs/NORTHSTAR_BUILD_SPEC.md`](docs/NORTHSTAR_BUILD_SPEC.md) section 18 for the phase plan.
+>
+> **No AI provider is required to run it.** Without `OPENAI_API_KEY` a deterministic provider is
+> used, so the full pipeline works offline at zero cost. See [The guidance engine](#the-guidance-engine).
 
 ---
 
@@ -161,6 +165,37 @@ in each hash so it can be raised later without invalidating existing passwords.
 button is hidden when its credentials are unset.
 
 After seeding, sign in as `dev@northstar.local` with password `northstar-dev-password`.
+
+## The guidance engine
+
+The interesting part is not the model call — it is what surrounds it. The pipeline
+(`src/features/guidance/orchestrator.ts`, spec section 9) runs:
+
+1. **Deterministic rules** (`features/guidance/rules`) — pure functions with stable IDs. They
+   check constraints and refuse high-stakes medical, legal, and investment questions _before_
+   anything is generated.
+2. **Retrieval** (`features/retrieval`) — pgvector cosine search restricted to `PUBLISHED`,
+   non-deleted sources, filtered by topic and region before ranking.
+3. **Generation** — behind the `GuidanceProvider` interface, under a timeout.
+4. **Two validation gates** — the strict Zod schema, then the citation allow-list. A report
+   citing a `sourceId` that was not retrieved is **rejected outright**, never repaired. A path
+   with no evidence can never claim a `STRONG` fit; that is enforced by the schema itself.
+5. **Persistence** — report, paths, reasons, actions, and citations in one transaction, with a
+   snapshot of the evidence the model actually saw.
+
+Confidence is derived from the rules and the evidence count — never asserted by the model — and
+is never shown without the reasons that produced it.
+
+### Running without an AI provider
+
+With no `OPENAI_API_KEY`, `resolveProvider()` returns a deterministic provider that composes a
+schema-valid report from the real question, criteria, and retrieved evidence, citing only source
+IDs that were genuinely retrieved. It is not a stub — the whole pipeline is exercised end to end.
+This is how tests and CI run, so no test can quietly spend money.
+
+With a key set, `openai-provider.ts` uses the Responses API with a strict JSON schema. Its output
+still goes through the same validation, because provider-side schema enforcement cannot check the
+citation allow-list.
 
 ## Troubleshooting: port 5432 already in use
 

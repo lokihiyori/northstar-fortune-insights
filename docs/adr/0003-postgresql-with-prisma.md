@@ -37,10 +37,9 @@ Supporting decisions:
   migration history; chosen over Drizzle because migration ergonomics and Studio matter more here
   than raw query control.
 - **Migrations are the only schema mechanism.** No `db push` against a database that matters.
-- **Extensions are created by the container, not by a migration** — see
-  `docker/postgres/init/01-extensions.sql`. Managed Postgres providers vary in whether a migration
-  role may `CREATE EXTENSION`, so keeping it in provisioning avoids a migration that works locally
-  and fails on deploy.
+- **Extensions are created by a migration** — `20260804000001_enable_vector_extension` — and _also_
+  by `docker/postgres/init/01-extensions.sql` for the local container. See the Phase 4 revision
+  below for why the migration is required.
 - `DIRECT_DATABASE_URL` is reserved for migrations against a pooled host (PgBouncer, Supabase,
   Neon), where the pooled connection cannot run DDL.
 
@@ -60,6 +59,38 @@ Supporting decisions:
 - The generated client is a build artifact, so a fresh clone must run `pnpm install` (which triggers
   `prisma generate`) before typecheck will pass. This is documented in the README.
 
-**Phase 0 status:** the schema contains only a placeholder `User` model, enough to exercise
-generate/migrate/seed. Phase 2 extends it to the Auth.js adapter shape; later phases add the entities
-in spec section 10.
+## Phase 4 revision: two things this ADR originally got wrong
+
+Both surfaced the moment a `vector` column actually existed.
+
+**1. Extensions cannot live only in container provisioning.** The original decision kept
+`CREATE EXTENSION vector` in the container init script, reasoning that a managed-Postgres migration
+role might not be permitted to create extensions. That overlooked Prisma's shadow database:
+`migrate dev` validates by replaying migrations into a throwaway database, which gets no init
+scripts. The first migration declaring `vector(1536)` failed with `type "vector" does not exist`,
+and no ordering trick fixes it — Prisma rebuilds the shadow from _applied_ history, so a migration
+inserted "before" already-applied ones is never replayed. The extension now lives in
+`20260804000001_enable_vector_extension`, guarded by `IF NOT EXISTS`. If a future managed host
+refuses `CREATE EXTENSION` from the migration role, the extension must be pre-provisioned there and
+the migration becomes the no-op it already is locally.
+
+**2. No approximate-nearest-neighbour index.** An HNSW index was added, then removed by
+`20260805064500_drop_unmanaged_vector_index`. Prisma 7 has no `Hnsw` index type, so the index could
+not be declared in `schema.prisma` — and Prisma diffs the live database against the schema, so an
+index it cannot represent is _permanent drift_. Every `migrate dev` generated a `DROP INDEX` for it
+and, without `--name`, blocked on an interactive prompt that hangs in a non-interactive shell.
+
+Retrieval therefore uses an **exact cosine scan** (`<=>` with no index). This is not the compromise
+it first appears: exact search has perfect recall where HNSW is approximate, and at the corpus size
+this ADR already assumed — curated, human-reviewed sources, tens of thousands of chunks — a
+sequential scan is comfortably fast. The trade is CPU per query for correctness and a working
+migration workflow.
+
+**If the corpus outgrows this:** add the ANN index as an operational step outside Prisma's managed
+schema, and pin the migration workflow to `migrate deploy` (which uses no shadow database) so the
+drift never reaches a developer's prompt.
+
+**Status of the model:** Phase 2 added the Auth.js adapter shape and the compass profile. Phase 4
+added sources and embedded chunks, guidance requests, versioned reports with paths and citations,
+action plans, feedback, and the usage ledger. Stripe and analytics entities from spec section 10
+arrive with Phase 6.
