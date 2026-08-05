@@ -1,0 +1,44 @@
+name: northstar
+
+services:
+  postgres:
+    # pgvector image so Phase 4 retrieval can enable the `vector` extension
+    # without swapping the local database out from under the project.
+    image: pgvector/pgvector:pg17
+    container_name: northstar-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-northstar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-northstar}
+      POSTGRES_DB: ${POSTGRES_DB:-northstar}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - northstar-postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-northstar} -d ${POSTGRES_DB:-northstar}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: northstar-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - northstar-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  northstar-postgres-data:
+  northstar-redis-data:

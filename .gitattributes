@@ -1,0 +1,15 @@
+# Normalize to LF in the repository so Linux CI and Windows developers agree.
+* text=auto eol=lf
+
+pnpm-lock.yaml -diff linguist-generated
+docs/NORTHSTAR_BUILD_SPEC.md linguist-documentation
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary

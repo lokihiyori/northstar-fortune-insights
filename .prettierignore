@@ -1,0 +1,11 @@
+.next
+out
+build
+coverage
+node_modules
+pnpm-lock.yaml
+src/generated
+prisma/migrations
+playwright-report
+test-results
+docs/NORTHSTAR_BUILD_SPEC.md
