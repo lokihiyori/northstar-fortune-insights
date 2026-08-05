@@ -119,7 +119,10 @@ The decisions and their trade-offs are recorded in [`docs/adr/`](docs/adr/README
 1. [Modular monolith over microservices](docs/adr/0001-modular-monolith.md)
 2. [Versioned Route Handlers for business APIs](docs/adr/0002-route-handlers-for-business-apis.md)
 3. [PostgreSQL with Prisma, including vector search](docs/adr/0003-postgresql-with-prisma.md)
+   — read the Phase 4 revision before touching migrations or the vector column
 4. [Redis is cache and coordination only](docs/adr/0004-redis-scope.md)
+5. [Accepting Auth.js v5 while it is still beta](docs/adr/0005-authjs-v5-beta.md)
+6. [JWT sessions, authorization enforced in layouts](docs/adr/0006-jwt-sessions-and-layered-authorization.md)
 
 ## Environment variables
 
@@ -137,15 +140,18 @@ depends on them tightens them.
 - **Playwright** — `tests/e2e`. Starts its own server (`pnpm dev` locally, `pnpm start` in CI).
   Run `pnpm test:e2e:install` once before the first run.
 
-`tests/e2e/auth-flows.spec.ts` **requires a running, migrated, seeded database** — start it with
-`pnpm db:up && pnpm db:migrate && pnpm db:seed` first. Those tests deliberately use no mocks and
-no injected session: they drive the real sign-in, sign-up, and onboarding flows and then assert
-the resulting rows in PostgreSQL, so a flow that renders correctly but persists nothing fails.
-Accounts are created on `@northstar.test` and removed by a global teardown, which also cleans up
-after a crashed run.
+`tests/e2e/auth-flows.spec.ts` and `tests/e2e/guidance.spec.ts` **require a running, migrated,
+seeded database** — start it with `pnpm db:up && pnpm db:migrate && pnpm db:seed` first. They
+deliberately use no mocks and no injected session: they drive the real sign-in, sign-up,
+onboarding, generation, and planning flows, then assert the resulting rows in PostgreSQL, so a
+flow that renders correctly but persists nothing fails. Accounts are created on `@northstar.test`
+and removed by a global teardown, which also cleans up after a crashed run.
 
-The AI layer is mocked in ordinary tests. Real-provider evaluation is a separate, explicit command
-with a cost limit (spec section 16) and arrives with Phase 4.
+The AI layer is **not** mocked. Tests run the real pipeline against the deterministic provider,
+which is selected automatically when `OPENAI_API_KEY` is unset — so no test can spend money, and
+the code path under test is the same one production uses. Evaluation against a real provider is a
+separate, explicit command with a cost limit (spec section 16) and arrives with the evaluation
+work in Phase 8.
 
 ## Authentication
 
