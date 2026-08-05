@@ -83,13 +83,22 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - Passwords use scrypt from `node:crypto` (`src/features/auth/password.ts`). The work factor
   is stored in each hash so it can be raised without invalidating existing passwords.
 
+## Local database
+
+- The Docker services publish on **55432** (PostgreSQL) and **56379** (Redis). A native
+  PostgreSQL on the host binds IPv4 `0.0.0.0:5432` and shadows Docker's published port, which
+  surfaces as a misleading Prisma `P1000` authentication error. See the README troubleshooting
+  section before changing ports.
+- `pnpm db:up` passes `--env-file .env` to compose, so `POSTGRES_PORT` / `REDIS_PORT` in `.env`
+  drive both the published ports and the connection strings from one place.
+- Connection strings use `127.0.0.1`, not `localhost`, to avoid IPv6-first resolution.
+
 ## Current phase
 
-**Phases 0–2 complete** — repository and tooling; Quiet Aurora design system and marketing
-site; authentication and the Build-your-compass onboarding.
+**Phases 0–2 complete and verified against a live database** — repository and tooling; Quiet
+Aurora design system and marketing site; authentication and the Build-your-compass onboarding.
+The migration is applied, the seed runs, and the authentication and onboarding flows are covered
+by Playwright tests that execute against real PostgreSQL (`tests/e2e/auth-flows.spec.ts`).
+
 Next: Phase 3 (dashboard and static report experience, on typed fixtures, before any AI).
 Do not begin future phases without approval.
-
-**Blocked:** Docker is not installed on the development machine, so no migration has ever been
-applied and the seed has never run. `prisma/migrations/20260804000000_init_auth_and_profile`
-was generated offline with `prisma migrate diff` and is unverified against a live database.

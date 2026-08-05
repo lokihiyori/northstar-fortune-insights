@@ -9,14 +9,13 @@ assumptions and trade-offs it carries, and what to do next.
 It is decision support, not fortune-telling. It does not predict outcomes and does not replace
 licensed professional advice.
 
-> **Status: Phases 0–2 complete.** Repository and tooling; the Quiet Aurora design system and
-> full marketing site; authentication and the Build-your-compass onboarding. The guidance
+> **Status: Phases 0–2 complete and verified against a live database.** Repository and tooling;
+> the Quiet Aurora design system and full marketing site; authentication and the
+> Build-your-compass onboarding. The migration has been applied to PostgreSQL 17, the seed has
+> run, and the sign-in, sign-up, sign-out, protected-route, callback-redirect, and onboarding
+> flows are covered by Playwright tests that execute against the real database. The guidance
 > workspace and engine arrive in Phases 3–4. See
 > [`docs/NORTHSTAR_BUILD_SPEC.md`](docs/NORTHSTAR_BUILD_SPEC.md) section 18 for the phase plan.
->
-> **Not yet verified against a live database.** Docker was unavailable on the machine this was
-> built on, so no migration has been applied and the seed has never run. See
-> [Known gaps](#known-gaps).
 
 ---
 
@@ -134,6 +133,13 @@ depends on them tightens them.
 - **Playwright** — `tests/e2e`. Starts its own server (`pnpm dev` locally, `pnpm start` in CI).
   Run `pnpm test:e2e:install` once before the first run.
 
+`tests/e2e/auth-flows.spec.ts` **requires a running, migrated, seeded database** — start it with
+`pnpm db:up && pnpm db:migrate && pnpm db:seed` first. Those tests deliberately use no mocks and
+no injected session: they drive the real sign-in, sign-up, and onboarding flows and then assert
+the resulting rows in PostgreSQL, so a flow that renders correctly but persists nothing fails.
+Accounts are created on `@northstar.test` and removed by a global teardown, which also cleans up
+after a crashed run.
+
 The AI layer is mocked in ordinary tests. Real-provider evaluation is a separate, explicit command
 with a cost limit (spec section 16) and arrives with Phase 4.
 
@@ -156,24 +162,34 @@ button is hidden when its credentials are unset.
 
 After seeding, sign in as `dev@northstar.local` with password `northstar-dev-password`.
 
-## Known gaps
+## Troubleshooting: port 5432 already in use
 
-Honest status of what has and has not been exercised:
+The Docker services publish on **55432** (PostgreSQL) and **56379** (Redis), not the defaults.
 
-- **No migration has ever been applied.** `prisma/migrations/20260804000000_init_auth_and_profile`
-  was generated offline with `prisma migrate diff` because Docker was not available. The schema
-  validates and the client generates, but the SQL is unverified against a running PostgreSQL.
-- **The seed has never run**, so no sign-in, sign-up, or onboarding flow has been executed
-  end to end against real data.
-- Tests that need a database are therefore absent. The e2e suite covers what can be checked
-  without one: unauthenticated redirects, the API error envelope, callback-URL handling, and
-  marketing navigation.
+If a native PostgreSQL is already running on the host, it binds IPv4 `0.0.0.0:5432` and Docker's
+proxy is left with only the IPv6 wildcard. `localhost` resolves to IPv4 first, so a client aimed
+at the container reaches the _native_ server instead. It fails as an authentication error rather
+than a connection error, which is thoroughly misleading:
 
-Closing these is the first task before Phase 3:
+```
+Error: P1000: Authentication failed against database server,
+the provided database credentials for `northstar` are not valid.
+```
+
+Two ways to tell which server answered:
 
 ```bash
-pnpm db:up && pnpm db:migrate && pnpm db:seed
+# The container reports PostgreSQL 17.x (Debian); a local install usually differs.
+docker exec northstar-postgres psql -U northstar -d northstar -c "select version();"
+
+# Windows: see who owns the port. A `postgres` process here is a native install.
+Get-NetTCPConnection -LocalPort 5432 -State Listen |
+  ForEach-Object { (Get-Process -Id $_.OwningProcess).ProcessName }
 ```
+
+If you have no local PostgreSQL, set `POSTGRES_PORT=5432` and `REDIS_PORT=6379` in `.env` and
+update the two URLs to match. `pnpm db:up` passes `--env-file .env` to compose, so those values
+drive both the published ports and the connection strings from one place.
 
 ## License
 

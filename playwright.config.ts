@@ -7,6 +7,8 @@ const baseURL = process.env["PLAYWRIGHT_BASE_URL"] ?? `http://localhost:${PORT}`
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // Auth and onboarding specs create real rows; this removes them afterwards.
+  globalTeardown: "./tests/e2e/global-teardown.ts",
   fullyParallel: true,
   // A committed `test.only` should fail CI rather than silently skip the suite.
   forbidOnly: !!process.env["CI"],
