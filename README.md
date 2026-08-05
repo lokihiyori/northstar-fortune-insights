@@ -9,22 +9,39 @@ assumptions and trade-offs it carries, and what to do next.
 It is decision support, not fortune-telling. It does not predict outcomes and does not replace
 licensed professional advice.
 
-> **Status: Phases 0–4 complete and verified against a live database.** Repository and tooling;
+> **Status: Phases 0–7 complete and verified against a live database.** Repository and tooling;
 > the Quiet Aurora design system and full marketing site; authentication and the
 > Build-your-compass onboarding; the app workspace (guided composer, insight report, scenario
-> comparison, action plans, history); and the guidance engine — deterministic rules, pgvector
+> comparison, action plans, history); the guidance engine — deterministic rules, pgvector
 > retrieval over a reviewed corpus, structured generation behind a provider interface, and
-> citation validation. Every flow is covered by Playwright tests that run against real
-> PostgreSQL with no mocks. See
+> citation validation; action plans, feedback and report versioning; local billing, entitlements
+> and analytics; and the admin area with source ingestion, lifecycle, and audit history. See
 > [`docs/NORTHSTAR_BUILD_SPEC.md`](docs/NORTHSTAR_BUILD_SPEC.md) section 18 for the phase plan.
+>
+> Every flow is covered by Playwright tests that run against real PostgreSQL with no mocks.
+> Warm-cache invalidation is additionally covered by an integration test that drives the real
+> retrieval service against real PostgreSQL **and real Redis** (closed at commit `314ab45`): it
+> proves a retired source stops being returned while its previous cache entry is still physically
+> present in Redis — ruling out expiry or key deletion as the explanation.
 >
 > **No AI provider is required to run it.** Without `OPENAI_API_KEY` a deterministic provider is
 > used, so the full pipeline works offline at zero cost. See [The guidance engine](#the-guidance-engine).
 >
-> **Stripe is implemented but unverified.** Checkout, Customer Portal, and webhook handling have
-> never run against Stripe, because no test-mode credentials are configured. Billing degrades
-> cleanly without keys — the upgrade path is disabled and explained rather than failing. Do not
-> treat it as working until `stripe listen` has exercised it.
+> **Known limitations**
+>
+> - **Stripe is implemented but unverified.** Checkout, Customer Portal, and webhook handling have
+>   never run against Stripe, because no test-mode credentials are configured. Billing degrades
+>   cleanly without keys — the upgrade path is disabled and explained rather than failing. Do not
+>   treat it as working until `stripe listen` has exercised it.
+> - **The real OpenAI embedder is not wired up.** `resolveEmbedder()` always returns the
+>   deterministic embedder. Switching would require re-embedding the whole corpus, which needs a
+>   migration strategy rather than a flag flip.
+> - **Source ingestion is paste-only, by design.** An admin supplies text; there is no remote URL
+>   fetching, HTML extraction, or scheduled re-ingestion. Fetching remote content raises SSRF and
+>   content-trust questions that deserve their own design.
+> - **CI does not yet run the database-backed suites.** The workflow has no PostgreSQL or Redis
+>   service containers, so `pnpm test:integration` and `pnpm test:e2e` currently pass only locally.
+>   `pnpm verify` is unaffected — `pnpm test` is unit-only and needs no services.
 
 ---
 
