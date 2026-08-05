@@ -9,7 +9,7 @@ export function GET() {
     data: {
       status: "ok",
       service: "northstar",
-      phase: 0,
+      phase: 6,
       timestamp: new Date().toISOString(),
     },
   });
