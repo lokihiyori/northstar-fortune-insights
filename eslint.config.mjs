@@ -30,8 +30,18 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    // Seed and test tooling legitimately log to stdout.
-    files: ["prisma/**/*.ts", "tests/**/*.ts", "tests/**/*.tsx", "*.config.ts", "*.config.mts"],
+    // Seed and test tooling legitimately log to stdout. So do the startup
+    // diagnostics in instrumentation and env validation — that output is the
+    // process boot log an operator reads, not stray debugging.
+    files: [
+      "prisma/**/*.ts",
+      "tests/**/*.ts",
+      "tests/**/*.tsx",
+      "*.config.ts",
+      "*.config.mts",
+      "src/instrumentation.ts",
+      "src/lib/env/server.ts",
+    ],
     rules: {
       "no-console": "off",
     },

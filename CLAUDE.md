@@ -134,6 +134,21 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - `AuditLog` is append-only. There is no update or delete helper, and secrets, prompts, and
   personal fields are stripped from metadata before writing.
 
+## Security posture (Phase 8A)
+
+- **Environment validation runs at startup** in `src/instrumentation.ts` — the only boundary Next
+  guarantees completes before requests are served. Never move it into a layout or the proxy.
+- Variables are tiered: always-required, production-runtime-only, all-or-nothing provider groups,
+  and optional. Production checks are skipped during `next build` (`NEXT_PHASE`), so CI never needs
+  runtime secrets.
+- **Validation errors name the variable and the rule, never the value.** Keep it that way.
+- Security headers come from `next.config.ts` `headers()`, not the proxy — it covers static routes
+  and would otherwise force dynamic rendering. HSTS is production-only.
+- **CSP is `Content-Security-Policy-Report-Only` and enforces nothing.** Do not describe it as
+  enforced. Blockers are listed in `CSP_ENFORCEMENT_BLOCKERS` (`src/lib/security/headers.ts`).
+- Cookie posture is stated in `features/auth/cookies.ts` and unit-tested for both modes.
+  `SameSite=Lax` is deliberate: Strict breaks the OAuth callback.
+
 ## Current phase
 
 **Phases 0–7 complete and verified against a live database**, with one explicit exception below.

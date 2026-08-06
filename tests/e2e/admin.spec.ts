@@ -50,7 +50,10 @@ async function createAdmin(page: Page): Promise<string> {
   // role to take effect — a stale token must not grant admin access.
   await page.goto("/app");
   await page.getByRole("button", { name: "Sign out" }).click();
-  await page.waitForURL("/");
+  // `commit` rather than the default `load`: this only needs to observe that
+  // the sign-out redirect happened, not that every subresource on the landing
+  // page — the heaviest in the app — finished downloading.
+  await page.waitForURL("/", { waitUntil: "commit" });
   await signIn(page, email);
 
   return email;

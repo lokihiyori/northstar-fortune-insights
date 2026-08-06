@@ -293,6 +293,59 @@ no `REDIS_URL`, or with Redis down, retrieval simply runs uncached.
 Every source mutation writes an append-only `AuditLog` record — visible on the source page and on
 `/admin`.
 
+## Security posture
+
+Recorded in [ADR 0007](docs/adr/0007-security-headers-and-env-validation.md).
+
+### Environment validation
+
+`src/instrumentation.ts` validates the environment once, at server startup, before any request is
+served. Variables are graded rather than treated as one list:
+
+| Tier                          | Variables                                                               |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| Always required               | `DATABASE_URL`                                                          |
+| Production runtime only       | `AUTH_SECRET` (≥32 chars), `NEXT_PUBLIC_APP_URL` (https, not localhost) |
+| Provider groups (all or none) | Stripe (3), Google (2)                                                  |
+| Optional everywhere           | `REDIS_URL`, `DIRECT_DATABASE_URL`, `OPENAI_*`, `SEED_ADMIN`            |
+
+Two consequences worth knowing:
+
+- **A build does not require runtime secrets.** `next build` runs with `NODE_ENV=production`, so
+  production checks are skipped during the build phase. CI never needs an `AUTH_SECRET`.
+- **Missing Stripe/OpenAI keys never block local startup.** The deterministic provider is selected
+  and the upgrade path is disabled; startup logs say so by name.
+
+Validation errors name the variable and the rule and **never print the value**. In production a
+failure exits the process non-zero so a supervisor sees it; in development it is rethrown.
+
+### Security headers
+
+Applied to every route from `next.config.ts`:
+
+| Header                                | Value                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------- |
+| `Content-Security-Policy-Report-Only` | Narrow policy, no wildcards, `frame-ancestors 'none'`                           |
+| `X-Content-Type-Options`              | `nosniff`                                                                       |
+| `X-Frame-Options`                     | `DENY`                                                                          |
+| `Referrer-Policy`                     | `strict-origin-when-cross-origin`                                               |
+| `Permissions-Policy`                  | Camera, microphone, geolocation, payment, USB and more denied                   |
+| `Strict-Transport-Security`           | **Production only** — sending it over local http would pin `localhost` to https |
+
+> **CSP is Report-Only and blocks nothing.** It reports violations; it does not yet protect against
+> them. The blockers to enforcement are listed in `CSP_ENFORCEMENT_BLOCKERS` in
+> `src/lib/security/headers.ts` — chiefly that `script-src` still needs `'unsafe-inline'`, and
+> removing it requires per-request nonces that would force dynamic rendering on all ten currently
+> static marketing routes.
+
+### Authentication cookies
+
+`buildCookieOptions()` states the posture explicitly instead of inheriting it: `HttpOnly` always,
+`SameSite=Lax`, `Path=/`, and `Secure` plus the `__Secure-`/`__Host-` prefixes in production only.
+
+`SameSite=Lax` rather than `Strict` is deliberate — Strict would strip the cookie from the OAuth
+callback navigation and break Google sign-in, while Lax still withholds it from cross-site POSTs.
+
 ## Troubleshooting: port 5432 already in use
 
 The Docker services publish on **55432** (PostgreSQL) and **56379** (Redis), not the defaults.

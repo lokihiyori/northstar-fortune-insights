@@ -108,10 +108,19 @@ test("generates a source-backed insight and converts it into an action plan", as
   await expect(page.getByRole("img", { name: /complete$/ })).toBeVisible();
 
   // The report and plan are both in history and on the dashboard.
-  await page.goto("/app/history");
+  //
+  // Navigated through the app's own sidebar rather than `page.goto`. A hard
+  // navigation issued while Next's client router already has one in flight is
+  // cancelled by the browser (`net::ERR_ABORTED`), which showed up as a flake
+  // only once the suite grew enough to contend for the dev server.
+  const appNav = page.getByRole("navigation", { name: "Application" });
+
+  await appNav.getByRole("link", { name: "History" }).click();
+  await page.waitForURL(/\/app\/history/);
   await expect(page.getByText("accounting credential")).toBeVisible();
 
-  await page.goto("/app");
+  await appNav.getByRole("link", { name: "Dashboard" }).click();
+  await page.waitForURL(/\/app$/);
   await expect(page.getByText("Next best action")).toBeVisible();
 });
 

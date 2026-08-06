@@ -77,7 +77,10 @@ test("signs out and loses access to protected routes", async ({ page }) => {
   await page.waitForURL(/\/app/);
 
   await page.getByRole("button", { name: "Sign out" }).click();
-  await page.waitForURL("/");
+  // `commit` rather than the default `load`: this only needs to observe that
+  // the sign-out redirect happened, not that every subresource on the landing
+  // page — the heaviest in the app — finished downloading.
+  await page.waitForURL("/", { waitUntil: "commit" });
 
   // The session is genuinely gone, not just visually.
   expect((await page.request.get("/api/v1/me")).status()).toBe(401);
@@ -187,7 +190,7 @@ test("resumes onboarding at the next unfinished step in a new session", async ({
   // Sign out, then back in — progress must survive the session.
   await page.goto("/app");
   await page.getByRole("button", { name: "Sign out" }).click();
-  await page.waitForURL("/");
+  await page.waitForURL("/", { waitUntil: "commit" });
 
   await signIn(page, email, TEST_PASSWORD);
 
