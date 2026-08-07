@@ -346,6 +346,49 @@ Applied to every route from `next.config.ts`:
 `SameSite=Lax` rather than `Strict` is deliberate — Strict would strip the cookie from the OAuth
 callback navigation and break Google sign-in, while Lax still withholds it from cross-site POSTs.
 
+### Rate limiting and abuse protection
+
+Recorded in [ADR 0008](docs/adr/0008-rate-limiting.md). Every limit lives in
+`src/lib/rate-limit/policies.ts`; route handlers and server actions choose an operation, never a
+number.
+
+| Policy                | Counted against  | Limit | Window | On Redis failure |
+| --------------------- | ---------------- | ----- | ------ | ---------------- |
+| `AUTH_IP`             | client address   | 20    | 10 min | closed           |
+| `AUTH_IDENTIFIER`     | account (hashed) | 5     | 15 min | closed           |
+| `SIGN_UP`             | client address   | 5     | 60 min | closed           |
+| `SIGN_UP_IDENTIFIER`  | account (hashed) | 3     | 60 min | closed           |
+| `GUIDANCE_USER`       | user             | 3     | 15 min | closed           |
+| `GUIDANCE_IP`         | client address   | 10    | 15 min | closed           |
+| `REGENERATION_USER`   | user             | 5     | 60 min | closed           |
+| `ADMIN_MUTATION_USER` | user             | 30    | 10 min | closed           |
+| `ADMIN_MUTATION_IP`   | client address   | 60    | 10 min | closed           |
+| `READ_API_USER`       | user             | 300   | 5 min  | **open**         |
+
+Behaviour worth knowing:
+
+- **Sign-in limits count failures, not attempts.** Signing in successfully never consumes budget, so
+  you cannot lock yourself out by using the product.
+- **Exceeding a limit returns 429** with the standard error envelope, `code: "RATE_LIMITED"`, a
+  `requestId`, and a `Retry-After` header. The message is identical everywhere, so a locked account
+  cannot be told apart from an address that was never registered.
+- **A Redis outage on a fail-closed operation returns 503 `SERVICE_UNAVAILABLE`**, not 429 — the
+  cause is ours, not the caller's. Ordinary reads keep serving.
+- Nothing readable reaches Redis: identifiers and addresses are HMAC-hashed with `AUTH_SECRET`, and
+  values are counters. Keys are `northstar:rl:v1:<policy>:<digest>`.
+
+> **`X-Forwarded-For` is ignored unless you say otherwise.** `RATE_LIMIT_TRUSTED_PROXY_HOPS`
+> defaults to `0`, so **the four per-address policies above currently do nothing**. The header is
+> client input; believing it would let an attacker invent a new address per request, which is worse
+> than no limit because it looks like protection. Set the variable to the real number of proxies in
+> front of the app once a deployment is chosen. Until then, protection rests on the per-user and
+> per-account policies.
+
+Testing locally: the e2e suite runs the **real** policies — nothing is disabled and no test-only
+values are substituted. Test subjects are unique per test, and global teardown clears the
+`northstar:rl:v1:*` keyspace so repeated runs stay independent. `pnpm test:integration` exercises
+the Lua script, expiry, and concurrency against a real Redis.
+
 ## Troubleshooting: port 5432 already in use
 
 The Docker services publish on **55432** (PostgreSQL) and **56379** (Redis), not the defaults.

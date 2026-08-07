@@ -1,5 +1,6 @@
 import { requireApiAdmin } from "@/features/auth/guards";
 import { apiError, apiSuccess, fieldErrorsFrom } from "@/lib/api/response";
+import { enforceApi } from "@/lib/rate-limit/enforce";
 import { createSource } from "@/features/sources/service";
 import { createSourceSchema } from "@/features/sources/validation";
 import { listSourcesForAdmin } from "@/features/sources/queries";
@@ -40,6 +41,14 @@ export async function GET() {
 export async function POST(request: Request) {
   const auth = await requireApiAdmin();
   if (!auth.ok) return auth.response;
+
+  // Same ceiling as the admin UI's server action, applied here because a Route
+  // Handler is its own entry point — exactly like the authorization check above.
+  const limited = await enforceApi("adminMutation", {
+    headers: request.headers,
+    userId: auth.user.id,
+  });
+  if (limited) return limited;
 
   const raw = await request.text();
   if (raw.length > MAX_BODY_BYTES) {

@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { RecommendationMap } from "@/components/guidance/recommendation-map";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
+import { FormMessage } from "@/components/ui/field";
 import { FeedbackPanel } from "@/components/guidance/feedback-panel";
 import { requireUser } from "@/features/auth/guards";
 import {
@@ -18,12 +19,34 @@ import { createPlanFromPath } from "@/features/plans/actions";
 
 export const metadata: Metadata = { title: "Insight" };
 
-export default async function InsightPage({ params }: { params: Promise<{ id: string }> }) {
+/**
+ * Refusals that `regenerateReport` redirects back with.
+ *
+ * The redirect already existed for `allowance` but nothing rendered it, so a
+ * refused regeneration looked like a button that did nothing. Both messages are
+ * generic: neither names a limit, a window, or a bucket.
+ */
+const REGENERATION_ERRORS: Record<string, string> = {
+  allowance: "You have used this month's reports, so this one was not regenerated.",
+  "rate-limited": "Too many attempts. Please wait a moment and try again.",
+};
+
+export default async function InsightPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { id } = await params;
   const user = await requireUser(`/app/insights/${id}`);
 
   const report = await getReportForUser(id, user.id);
   if (!report) notFound();
+
+  const errorParam = (await searchParams)["error"];
+  const regenerationError =
+    typeof errorParam === "string" ? REGENERATION_ERRORS[errorParam] : undefined;
 
   const [versions, feedback] = await Promise.all([
     listVersionsForReport(id, user.id),
@@ -44,6 +67,12 @@ export default async function InsightPage({ params }: { params: Promise<{ id: st
 
         <h1 className="mt-3 text-2xl font-semibold tracking-tight">{report.question}</h1>
         <p className="text-text-secondary mt-3 max-w-3xl">{report.summary}</p>
+
+        {regenerationError ? (
+          <div className="mt-6">
+            <FormMessage>{regenerationError}</FormMessage>
+          </div>
+        ) : null}
 
         <div className="mt-6 flex flex-wrap gap-3">
           {report.planId ? (

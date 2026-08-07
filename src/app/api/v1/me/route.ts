@@ -1,14 +1,24 @@
 import { requireApiUser } from "@/features/auth/guards";
 import { apiError, apiSuccess } from "@/lib/api/response";
+import { enforceApi } from "@/lib/rate-limit/enforce";
 import { compassCompletion, getCompassProfile } from "@/features/onboarding/queries";
 
 export const runtime = "nodejs";
 // Session-dependent, so it must never be cached or statically prerendered.
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   const authResult = await requireApiUser();
   if (!authResult.ok) return authResult.response;
+
+  // An ordinary read, so this limit is **fail-open**: if Redis is down the
+  // account still loads. PostgreSQL is the source of truth and a cache outage
+  // must cost protection, never availability (ADR 0004).
+  const limited = await enforceApi("accountRead", {
+    headers: request.headers,
+    userId: authResult.user.id,
+  });
+  if (limited) return limited;
 
   try {
     const profile = await getCompassProfile(authResult.user.id);

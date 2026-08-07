@@ -58,6 +58,19 @@ export const serverEnvSchema = z.object({
   REDIS_URL: z.string().url("must be a valid Redis URL").optional(),
   DIRECT_DATABASE_URL: z.string().url().optional(),
   SEED_ADMIN: z.string().optional(),
+
+  /**
+   * How many trusted proxies sit in front of this process (Phase 8B).
+   *
+   * Absent or `0` means `X-Forwarded-For` is never believed, which is the safe
+   * default and disables per-IP rate limiting. Set it to the real hop count
+   * only once a deployment proxy is chosen — a wrong value is worse than none,
+   * because it makes a spoofable header look authoritative.
+   */
+  RATE_LIMIT_TRUSTED_PROXY_HOPS: z
+    .string()
+    .regex(/^\d+$/, "must be a whole number of proxy hops")
+    .optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

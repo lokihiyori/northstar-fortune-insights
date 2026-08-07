@@ -1,12 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { requireUser } from "@/features/auth/guards";
 import { recordEvent } from "@/features/analytics/events";
 import { getEntitlements } from "@/features/billing/entitlements";
 import { prisma } from "@/lib/db/prisma";
+import { enforceAction } from "@/lib/rate-limit/enforce";
 import { runGuidancePipeline } from "./orchestrator";
 import { countReportsThisPeriod, recordReportUsage } from "./usage";
 import type { GuidanceInput } from "./rules/types";
@@ -49,6 +51,17 @@ export async function regenerateReport(formData: FormData): Promise<void> {
     select: { id: true, requestId: true, request: { select: { inputSnapshot: true } } },
   });
   if (!report) redirect("/app/history");
+
+  // Regeneration re-runs the entire pipeline at full cost, so it carries its
+  // own ceiling. Surfaced the same way a refused allowance already is, rather
+  // than as an error screen.
+  const limited = await enforceAction("regeneration", {
+    headers: await headers(),
+    userId: user.id,
+  });
+  if (limited) {
+    redirect(`/app/insights/${report.id}?error=rate-limited`);
+  }
 
   const [entitlements, used] = await Promise.all([
     getEntitlements(user.id),

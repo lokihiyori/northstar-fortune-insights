@@ -44,4 +44,39 @@ export async function register(): Promise<void> {
     // without killing a watch process the developer is iterating in.
     throw error;
   }
+
+  await openRedisConnection();
+}
+
+/**
+ * Opens the Redis connection at boot rather than on the first request.
+ *
+ * The client sets `enableOfflineQueue: false`, so a command issued while the
+ * socket is still connecting is rejected immediately rather than queued. That
+ * is right for a cache — a miss is free — but Phase 8B made rate limiting
+ * depend on the same client, and there fail-closed endpoints would answer 503
+ * for the whole connect window. Connecting here moves that window to startup,
+ * before any traffic arrives.
+ *
+ * Deliberately never throws and never blocks startup for long: Redis is
+ * optional (ADR 0004), and an outage must not stop the app from serving.
+ */
+async function openRedisConnection(): Promise<void> {
+  try {
+    const { getRedis } = await import("./lib/redis/client");
+    const redis = getRedis();
+    if (!redis || redis.status === "ready") return;
+
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        redis.off("ready", done);
+        resolve();
+      };
+      const timer = setTimeout(done, 2_000);
+      redis.once("ready", done);
+    });
+  } catch {
+    // Already reported by the client's own error handler; startup continues.
+  }
 }

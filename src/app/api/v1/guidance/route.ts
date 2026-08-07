@@ -7,6 +7,7 @@ import { composerSchema } from "@/features/guidance/composer";
 import { runGuidancePipeline } from "@/features/guidance/orchestrator";
 import { countReportsThisPeriod, recordReportUsage } from "@/features/guidance/usage";
 import { prisma } from "@/lib/db/prisma";
+import { enforceApi } from "@/lib/rate-limit/enforce";
 import { getCompassProfile } from "@/features/onboarding/queries";
 import { PROMPT_NAME, PROMPT_VERSION } from "@/features/guidance/ai/prompt";
 import type { GuidanceInput, NormalizedConstraint } from "@/features/guidance/rules/types";
@@ -26,6 +27,19 @@ export async function POST(request: Request) {
   const auth = await requireApiUser();
   if (!auth.ok) return auth.response;
   const { user } = auth;
+
+  // After authentication so a rejected request never spends someone's budget,
+  // and before parsing so an abusive caller cannot make us do work first.
+  //
+  // This is a burst ceiling, distinct from the monthly entitlement below. The
+  // entitlement cannot stop a burst on its own: usage is charged only on
+  // success and only after the response is sent, so several rapid submissions
+  // all read a ledger that has not caught up.
+  const limited = await enforceApi("guidanceGeneration", {
+    headers: request.headers,
+    userId: user.id,
+  });
+  if (limited) return limited;
 
   const raw = await request.text();
   if (raw.length > MAX_BODY_BYTES) {

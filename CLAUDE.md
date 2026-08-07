@@ -149,6 +149,31 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - Cookie posture is stated in `features/auth/cookies.ts` and unit-tested for both modes.
   `SameSite=Lax` is deliberate: Strict breaks the OAuth callback.
 
+## Rate limiting (Phase 8B)
+
+- **Every limit is declared in `src/lib/rate-limit/policies.ts`.** Callers select an _operation_,
+  never a number, so a path reachable as both a Route Handler and a Server Action cannot diverge.
+  Adding a number anywhere else is the mistake this structure exists to prevent.
+- Enforcement always sits **after** the auth guard and **before** any expensive work, so a rejected
+  request never spends a legitimate user's budget.
+- **Increment and expiry are one Lua script** (ADR 0008). Never split them: a crash between `INCR`
+  and `EXPIRE` leaves a key with no TTL, which is a permanent lockout. The TTL is set only on the
+  first increment so a subject cannot extend their own window.
+- **Failure mode is per policy.** Credential, generation, and admin policies fail **closed**; a
+  Redis outage there returns **503 `SERVICE_UNAVAILABLE`**, never 429 — a 429 blames the caller for
+  our outage. Ordinary reads fail **open** (ADR 0004).
+- **Credential policies count failures, not attempts** (`counting: "on-failure"`), so a successful
+  sign-in never consumes budget. `peek` refuses at `count >= limit`; `consume` refuses at
+  `count > limit`. That asymmetry is deliberate — see the comment on `decide`.
+- Refusal messages are identical everywhere and name no account, limit, window, policy, or bucket.
+  On the sign-in form that is the entire enumeration defence.
+- **Nothing readable reaches Redis.** Identifiers and IPs are HMAC-hashed with `AUTH_SECRET`; keys
+  are `northstar:rl:v1:<policy>:<digest>` and values are counters.
+- **`X-Forwarded-For` is ignored unless `RATE_LIMIT_TRUSTED_PROXY_HOPS` is set**, so per-IP policies
+  are currently inert. Never make the header trusted by default, and never fall back to a shared
+  "unknown" bucket — one attacker would exhaust everyone's allowance.
+- Tests run the real policies. Do not add a switch that disables limiting; isolate by subject.
+
 ## Current phase
 
 **Phases 0–7 complete and verified against a live database**, with one explicit exception below.

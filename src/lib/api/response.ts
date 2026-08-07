@@ -25,6 +25,10 @@ export const ERROR_CODES = {
   CONFLICT: "CONFLICT",
   RATE_LIMITED: "RATE_LIMITED",
   INTERNAL: "INTERNAL",
+  // A dependency the endpoint cannot serve without is down. Distinct from
+  // RATE_LIMITED on purpose: telling a user they sent too many requests when
+  // the real cause is our own outage sends them away to wait for nothing.
+  SERVICE_UNAVAILABLE: "SERVICE_UNAVAILABLE",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -37,6 +41,7 @@ const STATUS: Record<ErrorCode, number> = {
   CONFLICT: 409,
   RATE_LIMITED: 429,
   INTERNAL: 500,
+  SERVICE_UNAVAILABLE: 503,
 };
 
 export function apiSuccess<T>(
@@ -50,7 +55,12 @@ export function apiSuccess<T>(
 export function apiError(
   code: ErrorCode,
   message: string,
-  init?: { fieldErrors?: Record<string, string[]>; status?: number },
+  init?: {
+    fieldErrors?: Record<string, string[]>;
+    status?: number;
+    /** Extra response headers, e.g. `Retry-After` on a 429 or 503. */
+    headers?: Record<string, string>;
+  },
 ): NextResponse<ApiError> {
   // A request id lets a user quote a failure without us logging their content.
   const requestId = randomUUID();
@@ -64,7 +74,10 @@ export function apiError(
         requestId,
       },
     },
-    { status: init?.status ?? STATUS[code] },
+    {
+      status: init?.status ?? STATUS[code],
+      ...(init?.headers ? { headers: init.headers } : {}),
+    },
   );
 }
 

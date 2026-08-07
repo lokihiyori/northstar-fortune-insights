@@ -1,8 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/features/auth/guards";
+import { enforceAction } from "@/lib/rate-limit/enforce";
 import { createSource, ingest, transitionSource, updateSourceMetadata } from "./service";
 import { createSourceSchema, ingestContentSchema, sourceMetadataSchema } from "./validation";
 import type { SourceStatus } from "@/generated/prisma/enums";
@@ -35,6 +37,22 @@ function fieldErrorsFrom(issues: { path: PropertyKey[]; message: string }[]) {
   return result;
 }
 
+/**
+ * Every admin mutation shares one ceiling.
+ *
+ * Called after `requireAdmin` so a rejected non-admin never spends a real
+ * admin's budget, and before any write so a burst is stopped before it reaches
+ * ingestion — which chunks and embeds, the most expensive thing an admin can
+ * trigger.
+ */
+async function adminMutationLimit(userId: string): Promise<string | null> {
+  const limited = await enforceAction("adminMutation", {
+    headers: await headers(),
+    userId,
+  });
+  return limited ? limited.message : null;
+}
+
 const METADATA_KEYS = ["title", "publisher", "region", "topic", "canonicalUrl", "summary"] as const;
 
 function metadataValues(formData: FormData): Record<string, string> {
@@ -47,6 +65,9 @@ export async function createSourceAction(
 ): Promise<AdminFormState> {
   const admin = await requireAdmin("/admin/sources");
   const values = { ...metadataValues(formData), content: read(formData, "content") };
+
+  const limited = await adminMutationLimit(admin.id);
+  if (limited) return { status: "error", message: limited, values };
 
   const parsed = createSourceSchema.safeParse({
     ...metadataValues(formData),
@@ -79,6 +100,9 @@ export async function updateSourceAction(
   const sourceId = read(formData, "sourceId");
   const values = metadataValues(formData);
 
+  const limited = await adminMutationLimit(admin.id);
+  if (limited) return { status: "error", message: limited, values };
+
   const parsed = sourceMetadataSchema.safeParse(values);
   if (!parsed.success) {
     return {
@@ -109,6 +133,9 @@ export async function ingestContentAction(
   const sourceId = read(formData, "sourceId");
   const content = read(formData, "content");
 
+  const limited = await adminMutationLimit(admin.id);
+  if (limited) return { status: "error", message: limited };
+
   const parsed = ingestContentSchema.safeParse({ content });
   if (!parsed.success) {
     return {
@@ -132,6 +159,13 @@ export async function transitionSourceAction(formData: FormData): Promise<void> 
 
   const allowed: SourceStatus[] = ["DRAFT", "REVIEWED", "PUBLISHED", "RETIRED"];
   if (!allowed.includes(to)) return;
+
+  const limited = await adminMutationLimit(admin.id);
+  if (limited) {
+    // This action has no form state to return to, so the refusal is surfaced
+    // the same way a refused transition already is.
+    redirect(`/admin/sources/${sourceId}?error=${encodeURIComponent(limited)}`);
+  }
 
   const result = await transitionSource({ id: admin.id, email: admin.email }, sourceId, to);
 

@@ -1,11 +1,13 @@
 "use server";
 
+import { headers } from "next/headers";
 import { AuthError } from "next-auth";
 import { signIn, signOut } from "@/auth";
 import { hashPassword } from "@/features/auth/password";
 import { signInSchema, signUpSchema } from "@/features/auth/validation";
 import { prisma } from "@/lib/db/prisma";
 import { fieldErrorsFrom } from "@/lib/api/response";
+import { enforceAction, recordFailedAttempt } from "@/lib/rate-limit/enforce";
 
 /**
  * Returned to the client so the form can re-render with accessible errors and
@@ -42,6 +44,16 @@ export async function registerAction(
       fieldErrors: fieldErrorsFrom(parsed.error),
       values,
     };
+  }
+
+  // Server-side, before any database work: account creation is the expensive
+  // and abusable part, so a farm must be stopped ahead of the lookup, not after.
+  const limited = await enforceAction("signUp", {
+    headers: await headers(),
+    identifier: parsed.data.email,
+  });
+  if (limited) {
+    return { status: "error", message: limited.message, values };
   }
 
   const existing = await prisma.user.findUnique({
@@ -112,6 +124,17 @@ export async function signInAction(
 
   const callbackUrl = readString(formData, "callbackUrl");
 
+  const context = { headers: await headers(), identifier: parsed.data.email };
+
+  // Checked without consuming: credential policies count failures only, so a
+  // person signing in legitimately several times can never lock themselves out.
+  const limited = await enforceAction("signIn", context);
+  if (limited) {
+    // Same shape as a wrong password, and a message that names no account, so
+    // this cannot be used to tell a real address from an unregistered one.
+    return { status: "error", message: limited.message, values };
+  }
+
   try {
     await signIn("credentials", {
       email: parsed.data.email,
@@ -123,6 +146,10 @@ export async function signInAction(
     });
   } catch (error) {
     if (error instanceof AuthError) {
+      // Only now is the attempt charged. A success throws a redirect instead of
+      // reaching this branch, so it never counts against the allowance.
+      await recordFailedAttempt("signIn", context);
+
       return {
         status: "error",
         // Deliberately does not say which of the two was wrong.
