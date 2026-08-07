@@ -82,10 +82,13 @@ describe("failure modes", () => {
     }
   });
 
-  it("counts only failed attempts for credential authentication", () => {
-    // Counting successes would let a person lock themselves out by signing in.
+  it("reserves capacity for credential authentication rather than reading a count", () => {
+    // Two properties in one: a success must not consume budget (or a person
+    // locks themselves out by signing in), and the gate must be a reservation
+    // rather than a read (or a concurrent burst all passes the same stale
+    // count and exceeds the limit).
     for (const p of policiesFor("signIn")) {
-      expect(p.counting).toBe("on-failure");
+      expect(p.counting).toBe("reserved");
     }
   });
 

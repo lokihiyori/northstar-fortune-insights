@@ -86,27 +86,15 @@ function unavailable(policy: RateLimitPolicy): RateLimitResult {
 }
 
 /**
- * `countIncludesAttempt` is the difference between the two callers, and getting
- * it wrong is an off-by-one that grants an extra attempt.
- *
- * `consume` has already incremented, so its count includes the attempt being
- * judged and the test is `count > limit`. `peek` reads the count *before* an
- * attempt, so a subject that has already used the whole allowance must be
- * refused now: `count >= limit`.
+ * The count always *includes* the attempt being judged, because the only way to
+ * ask is to reserve first. So the test is `count > limit`, not `count >= limit`.
  */
-function decide(
-  policy: RateLimitPolicy,
-  count: number,
-  ttlMs: number,
-  countIncludesAttempt: boolean,
-): RateLimitResult {
+function decide(policy: RateLimitPolicy, count: number, ttlMs: number): RateLimitResult {
   // A missing or already-expired TTL means the window is effectively over.
   const remainingMs = ttlMs > 0 ? ttlMs : policy.windowSeconds * 1000;
   const resetAt = new Date(Date.now() + remainingMs);
 
-  const exceeded = countIncludesAttempt ? count > policy.limit : count >= policy.limit;
-
-  if (exceeded) {
+  if (count > policy.limit) {
     return {
       status: "limited",
       allowed: false,
@@ -139,7 +127,12 @@ function readPair(raw: unknown): { count: number; ttlMs: number } | null {
 }
 
 /**
- * Counts one attempt against the policy and returns the resulting decision.
+ * Reserves one attempt against the policy and returns the resulting decision.
+ *
+ * This is the *gate*, not a report: capacity is taken before the caller does any
+ * expensive work, so no more than `limit` callers can be inside that work at
+ * once however many arrive simultaneously. Callers that turn out not to owe the
+ * attempt give it back with `release`.
  *
  * The increment happens whether or not the attempt is allowed, which is what
  * makes a sustained attacker stay locked out for the rest of the window.
@@ -165,7 +158,7 @@ export async function consume(policy: RateLimitPolicy, subject: string): Promise
     const pair = readPair(raw);
     if (!pair) return unavailable(policy);
 
-    return decide(policy, pair.count, pair.ttlMs, true);
+    return decide(policy, pair.count, pair.ttlMs);
   } catch {
     // Never surfaces the driver error: a connection string can carry credentials.
     return unavailable(policy);
@@ -173,42 +166,81 @@ export async function consume(policy: RateLimitPolicy, subject: string): Promise
 }
 
 /**
- * Reads the current state without consuming an attempt.
+ * Gives back one previously consumed attempt.
  *
- * Used by `on-failure` policies, which must know whether a subject is already
- * locked out before an attempt is made, but must not charge them for an attempt
- * that turns out to be a legitimate success.
+ * This is the other half of the reservation model: `consume` reserves capacity
+ * *before* expensive work, and this returns it when the work turns out not to
+ * have been a failure worth counting — a successful sign-in, or an
+ * infrastructure error that says nothing about the caller.
+ *
+ * There is no `peek`-based gate any more. Reading a count and then acting on it
+ * is not atomic: many concurrent callers all read the same pre-attempt value and
+ * are all admitted, so one burst can exceed the limit. Reserving first makes the
+ * gate itself atomic.
+ *
+ * The script is written so a release can never do damage:
+ *
+ * - **Key already gone** (window expired, or cleared): do nothing. A bare `DECR`
+ *   would recreate it at `-1` with no TTL — a corrupt bucket that never expires.
+ * - **Count would reach zero or below**: delete the key instead of storing a
+ *   zero or negative value.
+ * - **Key somehow has no TTL**: restore one rather than leaving it immortal.
+ *
+ * A release only ever removes *one* unit — the caller's own reservation — so a
+ * success can never erase a failure another request recorded.
  */
-export async function peek(policy: RateLimitPolicy, subject: string): Promise<RateLimitResult> {
+const LUA_RELEASE = `
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl == -2 then
+  return { 0, -2 }
+end
+local current = redis.call('DECR', KEYS[1])
+if current <= 0 then
+  redis.call('DEL', KEYS[1])
+  return { 0, -2 }
+end
+if ttl == -1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return { current, redis.call('PTTL', KEYS[1]) }
+`;
+
+const LUA_RELEASE_SHA = createHash("sha1").update(LUA_RELEASE).digest("hex");
+
+export async function release(policy: RateLimitPolicy, subject: string): Promise<void> {
   const redis = getRedis();
-  if (!redis) return unavailable(policy);
+  if (!redis) return;
 
   const key = rateLimitKey(policy.id, subject);
+  const windowMs = String(policy.windowSeconds * 1000);
 
   try {
-    const [countRaw, ttlRaw] = await redis
-      .multi()
-      .get(key)
-      .pttl(key)
-      .exec()
-      .then((replies) => [replies?.[0]?.[1], replies?.[1]?.[1]] as const);
-
-    const count = Number(countRaw ?? 0);
-    const ttlMs = Number(ttlRaw ?? 0);
-    if (!Number.isFinite(count)) return unavailable(policy);
-
-    return decide(policy, count, Number.isFinite(ttlMs) ? ttlMs : 0, false);
+    try {
+      await redis.evalsha(LUA_RELEASE_SHA, 1, key, windowMs);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("NOSCRIPT")) throw error;
+      await redis.eval(LUA_RELEASE, 1, key, windowMs);
+    }
   } catch {
-    return unavailable(policy);
+    /**
+     * **Fail-safe by TTL.** If the release cannot be delivered — Redis went away,
+     * or the process died between reserving and releasing — the reservation stays
+     * counted. It is not a permanent lock: the key carries the policy's window as
+     * its TTL from the first increment, so the worst case is that one legitimate
+     * attempt is charged as though it had failed, and it expires on its own.
+     * Failing in that direction is deliberate; the alternative is an attempt that
+     * escapes counting whenever Redis is unreachable at exactly the wrong moment.
+     */
   }
 }
 
 /**
- * Clears a subject's bucket.
+ * Clears a subject's bucket entirely.
  *
- * Not currently used on any request path — the `on-failure` counting mode makes
- * a post-success reset unnecessary, because a success never consumed anything.
- * Exported for deterministic test cleanup and for operational recovery.
+ * Not used on any request path — a successful sign-in releases its own single
+ * reservation rather than wiping the bucket, so it cannot erase failures other
+ * requests recorded. Exported for deterministic test cleanup and for operational
+ * recovery.
  */
 export async function reset(policy: RateLimitPolicy, subject: string): Promise<void> {
   const redis = getRedis();

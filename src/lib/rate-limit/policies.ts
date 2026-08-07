@@ -30,13 +30,19 @@ export type SubjectKind =
 export type FailureMode = "closed" | "open";
 
 /**
- * `always` — every attempt consumes budget.
- * `on-failure` — only rejected attempts consume budget, checked with a
- * non-consuming peek beforehand. Used for credential authentication: stuffing
- * produces failures, while a person signing in several times a day is not an
- * attack and must not be able to lock themselves out.
+ * `always` — every attempt consumes budget and keeps it.
+ *
+ * `reserved` — capacity is reserved atomically *before* the work, and given back
+ * if the outcome turns out not to be a failure worth counting. Used for
+ * credential authentication: stuffing produces failures, while a person signing
+ * in several times a day is not an attack and must not be able to lock
+ * themselves out.
+ *
+ * Reserving is what makes the limit hold under concurrency. Reading a count and
+ * then deciding is not atomic — many simultaneous callers all read the same
+ * pre-attempt value and are all admitted, so one burst can exceed the limit.
  */
-export type CountingMode = "always" | "on-failure";
+export type CountingMode = "always" | "reserved";
 
 export type RateLimitPolicy = {
   id: string;
@@ -64,9 +70,9 @@ export const RATE_LIMIT_POLICIES = {
     limit: 20,
     windowSeconds: 10 * MINUTE,
     failureMode: "closed",
-    counting: "on-failure",
+    counting: "reserved",
     rationale:
-      "Coarse per-address ceiling on failed credential attempts. Loose because shared NAT is common; AUTH_IDENTIFIER is the real control.",
+      "Coarse per-address ceiling on failed credential attempts, reserved before verification. Loose because shared NAT is common; AUTH_IDENTIFIER is the real control.",
   },
 
   /**
@@ -79,9 +85,9 @@ export const RATE_LIMIT_POLICIES = {
     limit: 5,
     windowSeconds: 15 * MINUTE,
     failureMode: "closed",
-    counting: "on-failure",
+    counting: "reserved",
     rationale:
-      "Five failed attempts per account per 15 minutes. Successes never consume budget, so a legitimate user cannot lock themselves out.",
+      "Five failed attempts per account per 15 minutes. Capacity is reserved before verification so a concurrent burst cannot exceed it, and a success gives its reservation back — a legitimate user cannot lock themselves out.",
   },
 
   /** Bot account farms. Inert until a trusted proxy supplies a client IP. */

@@ -367,8 +367,10 @@ number.
 
 Behaviour worth knowing:
 
-- **Sign-in limits count failures, not attempts.** Signing in successfully never consumes budget, so
-  you cannot lock yourself out by using the product.
+- **Sign-in reserves capacity before verifying the password, then refunds it on success.** Signing in
+  successfully never consumes budget, so you cannot lock yourself out by using the product — and
+  because the reservation is atomic, a burst of simultaneous attempts cannot slip past the limit
+  together. A provider or database fault refunds too: it is not evidence about the caller.
 - **Exceeding a limit returns 429** with the standard error envelope, `code: "RATE_LIMITED"`, a
   `requestId`, and a `Retry-After` header. The message is identical everywhere, so a locked account
   cannot be told apart from an address that was never registered.

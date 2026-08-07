@@ -5,9 +5,17 @@ import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { RATE_LIMIT_KEY_PREFIX, consume, peek, rateLimitKey } from "@/lib/rate-limit/limiter";
-import { enforce, rateLimitResponse, recordFailedAttempt } from "@/lib/rate-limit/enforce";
+import { RATE_LIMIT_KEY_PREFIX, consume, rateLimitKey, release } from "@/lib/rate-limit/limiter";
+import {
+  enforce,
+  rateLimitResponse,
+  releaseReservation,
+  reserve,
+  settleCredentialAttempt,
+  type CredentialOutcome,
+} from "@/lib/rate-limit/enforce";
 import { policy, type RateLimitPolicy } from "@/lib/rate-limit/policies";
+import { digestIdentifier, digestIp, normalizeIdentifier } from "@/lib/rate-limit/identity";
 
 /**
  * The limiter against a real Redis.
@@ -229,32 +237,67 @@ describe("bucket independence", () => {
   });
 });
 
-describe("peek", () => {
-  it("reports state without consuming an attempt", async () => {
-    const p = testPolicy({ limit: 2, windowSeconds: 30 });
+describe("release", () => {
+  it("gives back exactly one unit", async () => {
+    const p = testPolicy({ limit: 3, windowSeconds: 30 });
     const subject = `user_${randomUUID()}`;
-    track(p, subject);
+    const key = track(p, subject);
 
-    expect((await peek(p, subject)).status).toBe("allowed");
-    expect((await peek(p, subject)).status).toBe("allowed");
+    await consume(p, subject);
+    await consume(p, subject);
+    expect(Number(await redis.get(key))).toBe(2);
 
-    // Three peeks, and the budget is still untouched.
-    expect((await consume(p, subject)).remaining).toBe(1);
-    expect((await consume(p, subject)).remaining).toBe(0);
-    expect((await consume(p, subject)).status).toBe("limited");
+    await release(p, subject);
+    expect(Number(await redis.get(key))).toBe(1);
   });
 
-  it("reports a subject that is already locked out", async () => {
-    const p = testPolicy({ limit: 1, windowSeconds: 30 });
+  it("never leaves a negative counter or a key without a TTL", async () => {
+    const p = testPolicy({ limit: 3, windowSeconds: 30 });
     const subject = `user_${randomUUID()}`;
-    track(p, subject);
+    const key = track(p, subject);
+
+    await consume(p, subject);
+
+    // More releases than reservations: the key must disappear rather than go
+    // negative, and must never be left immortal.
+    await release(p, subject);
+    await release(p, subject);
+    await release(p, subject);
+
+    expect(await redis.get(key)).toBeNull();
+    expect(await redis.pttl(key)).toBe(-2);
+  });
+
+  it("does nothing when the window has already expired", async () => {
+    // M. A bare DECR would recreate the key at -1 with no TTL: a corrupt bucket
+    // that never expires and permanently locks the subject out.
+    const p = testPolicy({ limit: 3, windowSeconds: 1 });
+    const subject = `user_${randomUUID()}`;
+    const key = track(p, subject);
+
+    await consume(p, subject);
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+    expect(await redis.exists(key)).toBe(0);
+
+    await release(p, subject);
+
+    expect(await redis.exists(key), "release must not resurrect an expired key").toBe(0);
+    expect(await redis.pttl(key)).toBe(-2);
+  });
+
+  it("keeps the TTL of a bucket that survives the release", async () => {
+    const p = testPolicy({ limit: 5, windowSeconds: 60 });
+    const subject = `user_${randomUUID()}`;
+    const key = track(p, subject);
 
     await consume(p, subject);
     await consume(p, subject);
+    await release(p, subject);
 
-    const seen = await peek(p, subject);
-    expect(seen.status).toBe("limited");
-    expect(seen.retryAfterSeconds).toBeGreaterThan(0);
+    // E. Still counted down from the original reservation, never reset.
+    const ttl = await redis.pttl(key);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(60_000);
   });
 });
 
@@ -264,7 +307,10 @@ describe("privacy of the keyspace", () => {
     const headers = new Headers({ "x-forwarded-for": "203.0.113.77" });
 
     // The real credential path, through the real policies.
-    await recordFailedAttempt("signIn", { headers, identifier: email });
+    const attempt = await reserve("signIn", { headers, identifier: email });
+    if (attempt.kind === "allow") {
+      await settleCredentialAttempt(attempt.reservation, "invalid-credentials");
+    }
     await enforce("signUp", { headers, identifier: email });
 
     const keys = await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:*`);
@@ -315,6 +361,372 @@ describe("privacy of the keyspace", () => {
   });
 });
 
+/**
+ * The credential reservation workflow, under real concurrency.
+ *
+ * These drive the same functions `signInAction` calls — reserve, then settle —
+ * with a stand-in for password verification that records how many callers got
+ * inside it. Testing only the low-level Lua would prove the counter is atomic
+ * while saying nothing about whether the *gate* actually keeps concurrent
+ * attempts out of the expensive path, which is the property that matters.
+ */
+describe("credential reservation under concurrency", () => {
+  const AUTH = policy("AUTH_IDENTIFIER");
+
+  type AttemptLog = {
+    submitted: number;
+    admitted: number;
+    refusedBeforeVerification: number;
+    committedFailures: number;
+    released: number;
+    unavailable: number;
+  };
+
+  function newLog(): AttemptLog {
+    return {
+      submitted: 0,
+      admitted: 0,
+      refusedBeforeVerification: 0,
+      committedFailures: 0,
+      released: 0,
+      unavailable: 0,
+    };
+  }
+
+  /**
+   * One credential attempt, mirroring the action's control flow.
+   *
+   * `verifyMs` stands in for scrypt: it keeps every admitted caller inside the
+   * expensive path long enough that a burst genuinely overlaps, so a gate that
+   * only reads a count would be observed admitting all of them.
+   */
+  async function attemptSignIn(
+    identifier: string,
+    outcome: CredentialOutcome,
+    log: AttemptLog,
+    options: { headers?: Headers; verifyMs?: number } = {},
+  ): Promise<"verified" | "refused" | "unavailable"> {
+    log.submitted += 1;
+    const headers = options.headers ?? new Headers();
+
+    const attempt = await reserve("signIn", { headers, identifier });
+
+    if (attempt.kind === "limit") {
+      log.refusedBeforeVerification += 1;
+      return "refused";
+    }
+    if (attempt.kind === "unavailable") {
+      log.unavailable += 1;
+      return "unavailable";
+    }
+
+    // Past the gate: this is the expensive path.
+    log.admitted += 1;
+    await new Promise((resolve) => setTimeout(resolve, options.verifyMs ?? 60));
+
+    await settleCredentialAttempt(attempt.reservation, outcome);
+    if (outcome === "invalid-credentials") log.committedFailures += 1;
+    else log.released += 1;
+
+    return "verified";
+  }
+
+  /**
+   * The exact key for one identifier, derived the same way the enforcement layer
+   * derives it. Scoped rather than globbed: several tests here run against the
+   * real AUTH_IDENTIFIER policy, so a wildcard would pick up buckets belonging
+   * to other tests in this file.
+   */
+  function authKeyFor(identifier: string): string {
+    const subject = digestIdentifier(normalizeIdentifier(identifier), process.env["AUTH_SECRET"]);
+    const key = rateLimitKey(AUTH.id, subject);
+    createdKeys.add(key);
+    return key;
+  }
+
+  it("A–F: 20 simultaneous wrong passwords admit exactly 5 and commit exactly 5", async () => {
+    const identifier = `burst-${randomUUID()}@northstar.test`;
+    const log = newLog();
+
+    // A. Launch well past the limit, all at once.
+    const SUBMITTED = 20;
+    const results = await Promise.all(
+      Array.from({ length: SUBMITTED }, () =>
+        attemptSignIn(identifier, "invalid-credentials", log),
+      ),
+    );
+
+    const key = authKeyFor(identifier);
+    expect(await redis.exists(key), "the identifier bucket must exist").toBe(1);
+
+    const finalCount = Number(await redis.get(key));
+    const ttl = await redis.pttl(key);
+
+    // Reported, not just asserted — this is the evidence for the report.
+    console.log(
+      `[credential burst] submitted=${String(log.submitted)} ` +
+        `admitted=${String(log.admitted)} ` +
+        `refusedBeforeVerification=${String(log.refusedBeforeVerification)} ` +
+        `committedFailures=${String(log.committedFailures)} ` +
+        `released=${String(log.released)} ` +
+        `redisCount=${String(finalCount)} ttlMs=${String(ttl)}`,
+    );
+
+    // B. At most the allowance reaches password verification...
+    expect(log.admitted).toBeLessThanOrEqual(AUTH.limit);
+    // ...and because all 20 start before any finishes, it is exactly the limit.
+    expect(log.admitted).toBe(AUTH.limit);
+
+    // C. Everything else is refused before verification.
+    expect(log.refusedBeforeVerification).toBe(SUBMITTED - AUTH.limit);
+    expect(results.filter((result) => result === "refused")).toHaveLength(SUBMITTED - AUTH.limit);
+    expect(log.unavailable).toBe(0);
+
+    // D. Exactly the allowance is committed — not 20, and not fewer than 5.
+    expect(log.committedFailures).toBe(AUTH.limit);
+    expect(finalCount).toBe(SUBMITTED);
+    expect(finalCount).toBeGreaterThanOrEqual(AUTH.limit);
+
+    // E. The bucket expires on its own.
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(AUTH.windowSeconds * 1000);
+
+    // F. And stays refused until it resets.
+    const after = await reserve("signIn", { headers: new Headers(), identifier });
+    expect(after.kind).toBe("limit");
+    if (after.kind === "limit") expect(after.retryAfterSeconds).toBeGreaterThan(0);
+  });
+
+  it("G: a new attempt is admitted once the window expires", async () => {
+    // The real AUTH_IDENTIFIER window is 15 minutes, so expiry is exercised on a
+    // policy with the same shape and a window short enough to observe.
+    const shortAuth = testPolicy({
+      subject: "identifier",
+      limit: 2,
+      windowSeconds: 1,
+      counting: "reserved",
+    });
+    const subject = `identifier_${randomUUID()}`;
+    track(shortAuth, subject);
+
+    await consume(shortAuth, subject);
+    await consume(shortAuth, subject);
+    expect((await consume(shortAuth, subject)).status).toBe("limited");
+
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+
+    const afterWindow = await consume(shortAuth, subject);
+    expect(afterWindow.status).toBe("allowed");
+    expect(afterWindow.remaining).toBe(1);
+  });
+
+  it("H: repeated successful sign-ins accumulate no permanent failure count", async () => {
+    const identifier = `success-${randomUUID()}@northstar.test`;
+    const log = newLog();
+
+    for (let i = 0; i < AUTH.limit * 3; i += 1) {
+      const result = await attemptSignIn(identifier, "authenticated", log, { verifyMs: 1 });
+      expect(result, `sign-in ${String(i + 1)}`).toBe("verified");
+    }
+
+    expect(log.admitted).toBe(AUTH.limit * 3);
+    expect(log.committedFailures).toBe(0);
+    expect(log.released).toBe(AUTH.limit * 3);
+    // Every reservation was given back, so no bucket remains at all.
+    expect(await redis.exists(authKeyFor(identifier))).toBe(0);
+  });
+
+  it("I: five concurrent successes release their reservations and leave no bucket", async () => {
+    const identifier = `concurrent-success-${randomUUID()}@northstar.test`;
+    const log = newLog();
+
+    await Promise.all(
+      Array.from({ length: AUTH.limit }, () => attemptSignIn(identifier, "authenticated", log)),
+    );
+
+    expect(log.admitted).toBe(AUTH.limit);
+    expect(log.released).toBe(AUTH.limit);
+    expect(await redis.exists(authKeyFor(identifier))).toBe(0);
+
+    // And the account is not locked afterwards.
+    const next = await reserve("signIn", { headers: new Headers(), identifier });
+    expect(next.kind).toBe("allow");
+    if (next.kind === "allow") await releaseReservation(next.reservation);
+  });
+
+  it("J: a mixed concurrent group leaves exactly the number of definitive failures", async () => {
+    const identifier = `mixed-${randomUUID()}@northstar.test`;
+    const log = newLog();
+
+    // Three genuine failures and two successes, all at once, inside the
+    // allowance so none of them is refused.
+    const outcomes: CredentialOutcome[] = [
+      "invalid-credentials",
+      "authenticated",
+      "invalid-credentials",
+      "authenticated",
+      "invalid-credentials",
+    ];
+
+    await Promise.all(outcomes.map((outcome) => attemptSignIn(identifier, outcome, log)));
+
+    const key = authKeyFor(identifier);
+    const count = Number(await redis.get(key));
+
+    expect(log.admitted).toBe(5);
+    expect(log.committedFailures).toBe(3);
+    expect(log.released).toBe(2);
+    // The two successes gave back their own units and nothing more, so the three
+    // real failures survive intact.
+    expect(count).toBe(3);
+    expect(await redis.pttl(key)).toBeGreaterThan(0);
+  });
+
+  it("K: with a trusted proxy, both the address and the account bucket apply", async () => {
+    vi.stubEnv("RATE_LIMIT_TRUSTED_PROXY_HOPS", "1");
+
+    try {
+      const address = `203.0.113.${String(20 + Math.floor(Math.random() * 200))}`;
+      const headers = new Headers({ "x-forwarded-for": address });
+      const log = newLog();
+
+      // Each attempt uses a different account, so only the address bucket can
+      // accumulate. AUTH_IP allows 20.
+      const ipPolicy = policy("AUTH_IP");
+      for (let i = 0; i < ipPolicy.limit; i += 1) {
+        const result = await attemptSignIn(
+          `spray-${String(i)}-${randomUUID()}@northstar.test`,
+          "invalid-credentials",
+          log,
+          { headers, verifyMs: 1 },
+        );
+        expect(result, `spray attempt ${String(i + 1)}`).toBe("verified");
+      }
+
+      for (const key of await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:${ipPolicy.id}:*`)) {
+        createdKeys.add(key);
+      }
+
+      // The address budget is now spent, even though every account was fresh.
+      const refused = await attemptSignIn(
+        `spray-final-${randomUUID()}@northstar.test`,
+        "invalid-credentials",
+        log,
+        { headers, verifyMs: 1 },
+      );
+      expect(refused).toBe("refused");
+      expect(log.admitted).toBe(ipPolicy.limit);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("L: a denial in the second policy releases the reservation taken by the first", async () => {
+    vi.stubEnv("RATE_LIMIT_TRUSTED_PROXY_HOPS", "1");
+
+    try {
+      const identifier = `rollback-${randomUUID()}@northstar.test`;
+      const address = "198.51.100.77";
+      const headers = new Headers({ "x-forwarded-for": address });
+      const ipPolicy = policy("AUTH_IP");
+
+      // Exhaust the *account* bucket first, using no address at all so the
+      // address bucket stays untouched.
+      const bare = new Headers();
+      for (let i = 0; i < AUTH.limit; i += 1) {
+        const attempt = await reserve("signIn", { headers: bare, identifier });
+        expect(attempt.kind).toBe("allow");
+        if (attempt.kind === "allow") {
+          await settleCredentialAttempt(attempt.reservation, "invalid-credentials");
+        }
+      }
+
+      // The exact address bucket, derived the same way the enforcement layer
+      // does — this address has never been used, so it must not exist yet.
+      const ipKey = rateLimitKey(ipPolicy.id, digestIp(address, process.env["AUTH_SECRET"]));
+      createdKeys.add(ipKey);
+      createdKeys.add(authKeyFor(identifier));
+
+      expect(await redis.exists(ipKey), "the address bucket must start empty").toBe(0);
+
+      // Now attempt with an address. AUTH_IP is reserved first and would allow;
+      // AUTH_IDENTIFIER then denies, so the address reservation must be handed
+      // back rather than left charged against an innocent address.
+      const denied = await reserve("signIn", { headers, identifier });
+      expect(denied.kind).toBe("limit");
+
+      // The decisive assertion: the rolled-back reservation left nothing behind.
+      // Without the rollback this key would exist with a count of 1, charging an
+      // address that never got as far as a password check.
+      expect(await redis.exists(ipKey), "the rolled-back reservation must not persist").toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("N: a Redis outage refuses the attempt without running verification", async () => {
+    vi.resetModules();
+    forgetCachedRedisClient();
+    vi.stubEnv("REDIS_URL", "redis://127.0.0.1:6392");
+
+    try {
+      const offline = await import("@/lib/rate-limit/enforce");
+
+      const attempt = await offline.reserve("signIn", {
+        headers: new Headers(),
+        identifier: `outage-${randomUUID()}@northstar.test`,
+      });
+
+      // Fail-closed: no reservation, so verification must not run.
+      expect(attempt.kind).toBe("unavailable");
+
+      const response = offline.rateLimitResponse(attempt);
+      expect(response?.status).toBe(503);
+      const body = (await response?.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("SERVICE_UNAVAILABLE");
+      // Never reported as a rate limit.
+      expect(body.error.code).not.toBe("RATE_LIMITED");
+
+      const client = await import("@/lib/redis/client");
+      client.getRedis()?.disconnect();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      await restoreHealthyRedisClient();
+    }
+  });
+
+  it("N: releasing during an outage cannot corrupt the bucket", async () => {
+    const p = testPolicy({ limit: 2, windowSeconds: 30 });
+    const subject = `user_${randomUUID()}`;
+    const key = track(p, subject);
+
+    await consume(p, subject);
+
+    vi.resetModules();
+    forgetCachedRedisClient();
+    vi.stubEnv("REDIS_URL", "redis://127.0.0.1:6392");
+
+    try {
+      const offline = await import("@/lib/rate-limit/limiter");
+      // Must not throw, and must not be able to write anything.
+      await offline.release(p, subject);
+
+      const client = await import("@/lib/redis/client");
+      client.getRedis()?.disconnect();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      await restoreHealthyRedisClient();
+    }
+
+    // The reservation stays counted — the documented fail-safe — and the TTL
+    // still bounds it, so nothing is locked out permanently.
+    expect(Number(await redis.get(key))).toBe(1);
+    expect(await redis.pttl(key)).toBeGreaterThan(0);
+  });
+});
+
 describe("real policies through the enforcement layer", () => {
   it("limits guidance generation for one user and leaves another alone", async () => {
     const guidance = policy("GUIDANCE_USER");
@@ -341,26 +753,37 @@ describe("real policies through the enforcement layer", () => {
     expect((await enforce("guidanceGeneration", { headers, userId: userB })).kind).toBe("allow");
   });
 
-  it("counts a failed sign-in but not a successful one", async () => {
+  it("charges a failed sign-in and refunds a successful one", async () => {
     const identifier = `attempts-${randomUUID()}@northstar.test`;
     const headers = new Headers();
     const auth = policy("AUTH_IDENTIFIER");
 
     for (let attempt = 0; attempt < auth.limit; attempt += 1) {
-      expect((await enforce("signIn", { headers, identifier })).kind).toBe("allow");
-      await recordFailedAttempt("signIn", { headers, identifier });
+      const reserved = await reserve("signIn", { headers, identifier });
+      expect(reserved.kind, `attempt ${String(attempt + 1)}`).toBe("allow");
+      if (reserved.kind === "allow") {
+        await settleCredentialAttempt(reserved.reservation, "invalid-credentials");
+      }
     }
 
     for (const key of await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:auth_identifier:*`)) {
       createdKeys.add(key);
     }
 
-    const refused = await enforce("signIn", { headers, identifier });
+    const refused = await reserve("signIn", { headers, identifier });
     expect(refused.kind).toBe("limit");
 
     // A different account is not affected by the locked one.
     const other = `other-${randomUUID()}@northstar.test`;
-    expect((await enforce("signIn", { headers, identifier: other })).kind).toBe("allow");
+    const otherAttempt = await reserve("signIn", { headers, identifier: other });
+    expect(otherAttempt.kind).toBe("allow");
+    if (otherAttempt.kind === "allow") {
+      // A success gives its unit straight back, leaving no trace.
+      await settleCredentialAttempt(otherAttempt.reservation, "authenticated");
+    }
+    expect(
+      await redis.exists(...(await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:auth_identifier:*`))),
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -373,6 +796,27 @@ function forgetCachedRedisClient(): void {
   const cache = globalThis as unknown as { redis?: Redis | null };
   cache.redis?.disconnect();
   delete cache.redis;
+}
+
+/**
+ * Rebuilds the shared client and waits until it can actually take commands.
+ *
+ * Without this, the test immediately after an outage test issues its first
+ * command while the replacement socket is still connecting. `enableOfflineQueue`
+ * is false, so that command is rejected and the limiter correctly reports an
+ * outage — a real behaviour, but not the one under test.
+ */
+async function restoreHealthyRedisClient(): Promise<void> {
+  forgetCachedRedisClient();
+  const { getRedis } = await import("@/lib/redis/client");
+  const client = getRedis();
+  if (client && client.status !== "ready") {
+    await new Promise<void>((resolve) => {
+      client.once("ready", () => {
+        resolve();
+      });
+    });
+  }
 }
 
 describe("Redis outage", () => {
@@ -408,8 +852,7 @@ describe("Redis outage", () => {
     } finally {
       vi.unstubAllEnvs();
       vi.resetModules();
-      // Drop the offline client so anything after this builds a healthy one.
-      forgetCachedRedisClient();
+      await restoreHealthyRedisClient();
     }
   });
 
@@ -434,8 +877,7 @@ describe("Redis outage", () => {
     } finally {
       vi.unstubAllEnvs();
       vi.resetModules();
-      // Drop the offline client so anything after this builds a healthy one.
-      forgetCachedRedisClient();
+      await restoreHealthyRedisClient();
     }
   });
 });

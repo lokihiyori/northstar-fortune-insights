@@ -132,6 +132,72 @@ test.describe("credential rate limiting", () => {
     await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
   });
 
+  test("a burst of simultaneous wrong passwords is bounded, not just a sequence", async ({
+    browser,
+  }) => {
+    // The gate reserves capacity before the password is verified. If it merely
+    // read a count first, every one of these would see the same pre-attempt
+    // value and all of them would reach verification.
+    const email = uniqueEmail("rl-burst");
+    const CONCURRENT = 8;
+
+    const contexts = await Promise.all(
+      Array.from({ length: CONCURRENT }, () => browser.newContext()),
+    );
+
+    try {
+      const messages = await Promise.all(
+        contexts.map(async (context) => {
+          const page = await context.newPage();
+          return attemptSignIn(page, email, "not-the-right-password");
+        }),
+      );
+
+      const wrongCredentials = messages.filter((message) => message === WRONG_CREDENTIALS).length;
+      const rateLimited = messages.filter((message) => message === RATE_LIMITED).length;
+
+      expect(wrongCredentials + rateLimited, "every attempt must get one of the two").toBe(
+        CONCURRENT,
+      );
+      // The decisive assertion: no more than the allowance reached verification,
+      // even though all of them were in flight together.
+      expect(wrongCredentials).toBeLessThanOrEqual(AUTH_FAILURES_ALLOWED);
+      expect(rateLimited).toBeGreaterThanOrEqual(CONCURRENT - AUTH_FAILURES_ALLOWED);
+
+      // And the account is locked afterwards.
+      const page = await contexts[0]!.newPage();
+      expect(await attemptSignIn(page, email, "not-the-right-password")).toBe(RATE_LIMITED);
+    } finally {
+      await Promise.all(contexts.map((context) => context.close()));
+    }
+  });
+
+  test("repeated successful sign-ins never consume the failure allowance", async ({ page }) => {
+    const email = uniqueEmail("rl-success");
+    await signUp(page, email);
+
+    // Sign-up leaves the session on the onboarding step, so each pass signs out
+    // from wherever it is and back in again. Well past the allowance: each
+    // success releases its own reservation, so none of them leaves anything.
+    for (let i = 0; i < AUTH_FAILURES_ALLOWED + 3; i += 1) {
+      await page.getByRole("button", { name: "Sign out" }).click();
+      await page.waitForURL("/", { waitUntil: "commit" });
+
+      await page.goto("/sign-in");
+      await page.getByLabel("Email").fill(email);
+      await page.getByLabel("Password").fill(TEST_PASSWORD);
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.waitForURL(/\/app/);
+    }
+
+    // Signing in eight times has not spent the account's failure budget: a wrong
+    // password still reads as a wrong password, not as a lockout.
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await page.waitForURL("/", { waitUntil: "commit" });
+
+    expect(await attemptSignIn(page, email, "not-the-right-password")).toBe(WRONG_CREDENTIALS);
+  });
+
   test("one account being locked out does not lock out another", async ({ browser }) => {
     const locked = uniqueEmail("rl-locked");
     const bystander = uniqueEmail("rl-bystander");

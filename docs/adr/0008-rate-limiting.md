@@ -60,15 +60,46 @@ So the failure mode is per policy, and an outage on a fail-closed operation retu
 `SERVICE_UNAVAILABLE`**, never 429. A 429 would blame the user for our outage and send them away to
 wait out a window that does not exist.
 
-### Credential limits count failures, not attempts
+### Credential limits reserve capacity, then refund it
 
-Successful sign-ins never consume budget. Counting them would let a person lock themselves out by
+Successful sign-ins must not consume budget — counting them would let a person lock themselves out by
 signing in legitimately several times in an afternoon, and credential stuffing produces failures by
-definition. This requires a non-consuming `peek` before the attempt and a `consume` after a failure.
+definition.
 
-The consequence is a deliberate off-by-one difference between the two: `consume` has already
-incremented, so it refuses at `count > limit`; `peek` reads the count _before_ the attempt, so it
-refuses at `count >= limit`.
+The first implementation did that with a non-consuming `peek` before the attempt and a `consume`
+after a failure. **That was wrong, and it was a correctness bug rather than a refinement.** Reading a
+count and then acting on it is not atomic: twenty simultaneous attempts all read the same
+pre-attempt value, all pass the gate, and all reach password verification. One burst could exceed
+both `AUTH_IDENTIFIER` and `AUTH_IP`.
+
+The gate is now a **reservation**:
+
+1. **Before verification**, capacity is reserved atomically against every applicable policy, using
+   the same Lua `INCR`+`PEXPIRE`. At most `limit` callers can be inside verification at once,
+   whatever the concurrency. Acquisition is all-or-nothing: if a later policy denies, every
+   reservation already taken is released, so a refused attempt never leaves a phantom unit charged
+   against a policy that would have allowed it.
+2. **After verification**, the attempt is settled by outcome:
+   - `invalid-credentials` — **commit**, which means do nothing. The unit was charged when it was
+     reserved, and that is precisely what makes the limit hold.
+   - `authenticated` — **release**. A success costs nothing.
+   - `indeterminate` (provider fault, database error — anything that is not a definitive credential
+     rejection) — **release**. It is not evidence about the caller, and charging it would let an
+     unrelated outage lock real people out.
+
+A release returns exactly one unit — the caller's own — so a success can never erase a failure that
+another concurrent request recorded.
+
+The release script is deliberately defensive, because a naive `DECR` is dangerous: on an expired key
+it recreates it at `-1` **with no TTL**, a corrupt bucket that never expires and permanently locks
+the subject out. So it checks `PTTL` first, deletes rather than storing zero or a negative value, and
+restores a TTL if one is somehow missing.
+
+**Fail-safe on crash.** If the process dies while holding a reservation, or Redis is unreachable when
+the release is attempted, the reservation stays counted. It is not a permanent lock: the key carries
+the policy window as its TTL from the first increment, so the worst case is that one legitimate
+attempt is charged as though it had failed, and it expires on its own. Failing in that direction is
+deliberate — the alternative lets attempts escape counting whenever Redis blips at the wrong moment.
 
 ### Nothing readable reaches the keyspace
 

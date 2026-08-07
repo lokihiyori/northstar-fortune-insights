@@ -162,9 +162,16 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - **Failure mode is per policy.** Credential, generation, and admin policies fail **closed**; a
   Redis outage there returns **503 `SERVICE_UNAVAILABLE`**, never 429 — a 429 blames the caller for
   our outage. Ordinary reads fail **open** (ADR 0004).
-- **Credential policies count failures, not attempts** (`counting: "on-failure"`), so a successful
-  sign-in never consumes budget. `peek` refuses at `count >= limit`; `consume` refuses at
-  `count > limit`. That asymmetry is deliberate — see the comment on `decide`.
+- **Credential policies reserve capacity, then refund it** (`counting: "reserved"`). Reserve
+  atomically _before_ password verification, then settle: `invalid-credentials` commits by doing
+  nothing, `authenticated` and `indeterminate` release. Never gate on a read-then-decide — that is
+  not atomic, and a concurrent burst all passes the same stale count. Multi-policy acquisition is
+  all-or-nothing; a later denial rolls back the earlier reservation.
+- **A release returns exactly one unit**, never clears the bucket, so a success cannot erase another
+  request's recorded failure. The release script refuses to resurrect an expired key, never stores a
+  zero or negative count, and never leaves a key without a TTL.
+- If a release cannot be delivered, the reservation stays counted and the TTL bounds it. That
+  direction is deliberate: the alternative lets attempts escape counting during a Redis blip.
 - Refusal messages are identical everywhere and name no account, limit, window, policy, or bucket.
   On the sign-in form that is the entire enumeration defence.
 - **Nothing readable reaches Redis.** Identifiers and IPs are HMAC-hashed with `AUTH_SECRET`; keys

@@ -19,8 +19,18 @@ vi.mock("@/lib/redis/client", () => ({
   cacheIncrement: async () => null,
 }));
 
-const { RATE_LIMITED_MESSAGE, UNAVAILABLE_MESSAGE, actionLimitResult, enforce, rateLimitResponse } =
-  await import("@/lib/rate-limit/enforce");
+const {
+  RATE_LIMITED_MESSAGE,
+  UNAVAILABLE_MESSAGE,
+  actionLimitResult,
+  enforce,
+  rateLimitResponse,
+  releaseReservation,
+  reserve,
+  settleCredentialAttempt,
+} = await import("@/lib/rate-limit/enforce");
+
+const { policy } = await import("@/lib/rate-limit/policies");
 
 const HEADERS = new Headers();
 
@@ -51,6 +61,56 @@ describe("failure mode when Redis cannot answer", () => {
   it("still serves an ordinary read", async () => {
     const decision = await enforce("accountRead", { headers: HEADERS, userId: "user_1" });
     expect(decision.kind).toBe("allow");
+  });
+});
+
+describe("credential attempt settlement", () => {
+  /** A handle shaped like a real reservation, without needing a live Redis. */
+  function handle() {
+    return {
+      held: [
+        { policy: policy("AUTH_IP"), subject: "digest_a" },
+        { policy: policy("AUTH_IDENTIFIER"), subject: "digest_b" },
+      ],
+    };
+  }
+
+  it("keeps the reservation when the credentials were definitively wrong", async () => {
+    const reservation = handle();
+    await settleCredentialAttempt(reservation, "invalid-credentials");
+
+    // Committing is doing nothing: the unit was charged when it was reserved,
+    // which is exactly what makes the limit hold under concurrency.
+    expect(reservation.held).toHaveLength(2);
+  });
+
+  it("gives the reservation back on successful authentication", async () => {
+    const reservation = handle();
+    await settleCredentialAttempt(reservation, "authenticated");
+    expect(reservation.held).toHaveLength(0);
+  });
+
+  it("gives the reservation back when the outcome says nothing about the caller", async () => {
+    // A provider fault or database error is not evidence of a wrong password,
+    // so charging it would let an unrelated outage lock real people out.
+    const reservation = handle();
+    await settleCredentialAttempt(reservation, "indeterminate");
+    expect(reservation.held).toHaveLength(0);
+  });
+
+  it("is safe to release twice, so a double settle cannot decrement twice", async () => {
+    const reservation = handle();
+    await releaseReservation(reservation);
+    await releaseReservation(reservation);
+    expect(reservation.held).toHaveLength(0);
+  });
+
+  it("holds nothing when a reservation could not be taken", async () => {
+    // Redis is unavailable in this suite, so sign-in must not come back with a
+    // handle the caller would later try to release.
+    const outcome = await reserve("signIn", { headers: HEADERS, identifier: "a@example.com" });
+    expect(outcome.kind).toBe("unavailable");
+    expect("reservation" in outcome).toBe(false);
   });
 });
 
