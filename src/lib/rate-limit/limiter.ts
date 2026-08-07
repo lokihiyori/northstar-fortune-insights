@@ -30,12 +30,32 @@ import { retryAfterSeconds, type RateLimitPolicy } from "./policies";
 /** Namespaced and versioned: `v1` can be retired without touching cache keys. */
 export const RATE_LIMIT_KEY_PREFIX = "northstar:rl:v1";
 
+/**
+ * Reserve one unit, saturating at the limit.
+ *
+ * The counter is **held capacity, not attempt volume**. A refused attempt does
+ * not increment: incrementing past the limit would mean the bucket no longer
+ * says how many reservations are outstanding, so a success refunding its own
+ * unit could leave the count above the limit with nothing actually held.
+ *
+ * Returned triple: `{ count, pttl, admitted }`.
+ */
 const LUA_CONSUME = `
-local current = redis.call('INCR', KEYS[1])
-if current == 1 then
-  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+local limit = tonumber(ARGV[1])
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+
+if current >= limit then
+  -- Refused: touch neither the counter nor the TTL. The window still ends when
+  -- the first reservation said it would, so a sustained caller cannot push it
+  -- back by continuing to knock.
+  return { current, redis.call('PTTL', KEYS[1]), 0 }
 end
-return { current, redis.call('PTTL', KEYS[1]) }
+
+local updated = redis.call('INCR', KEYS[1])
+if updated == 1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return { updated, redis.call('PTTL', KEYS[1]), 1 }
 `;
 
 const LUA_CONSUME_SHA = createHash("sha1").update(LUA_CONSUME).digest("hex");
@@ -86,15 +106,21 @@ function unavailable(policy: RateLimitPolicy): RateLimitResult {
 }
 
 /**
- * The count always *includes* the attempt being judged, because the only way to
- * ask is to reserve first. So the test is `count > limit`, not `count >= limit`.
+ * The script decides admission, not this function: it is the only place that can
+ * compare and increment without another caller slipping between the two. Here
+ * the flag is simply reported.
  */
-function decide(policy: RateLimitPolicy, count: number, ttlMs: number): RateLimitResult {
+function decide(
+  policy: RateLimitPolicy,
+  count: number,
+  ttlMs: number,
+  admitted: boolean,
+): RateLimitResult {
   // A missing or already-expired TTL means the window is effectively over.
   const remainingMs = ttlMs > 0 ? ttlMs : policy.windowSeconds * 1000;
   const resetAt = new Date(Date.now() + remainingMs);
 
-  if (count > policy.limit) {
+  if (!admitted) {
     return {
       status: "limited",
       allowed: false,
@@ -117,13 +143,13 @@ function decide(policy: RateLimitPolicy, count: number, ttlMs: number): RateLimi
   };
 }
 
-/** Reads the `{ count, pttl }` pair a script or pipeline returned. */
-function readPair(raw: unknown): { count: number; ttlMs: number } | null {
-  if (!Array.isArray(raw) || raw.length < 2) return null;
+/** Reads the `{ count, pttl, admitted }` triple the reserve script returns. */
+function readReply(raw: unknown): { count: number; ttlMs: number; admitted: boolean } | null {
+  if (!Array.isArray(raw) || raw.length < 3) return null;
   const count = Number(raw[0]);
   const ttlMs = Number(raw[1]);
   if (!Number.isFinite(count) || !Number.isFinite(ttlMs)) return null;
-  return { count, ttlMs };
+  return { count, ttlMs, admitted: Number(raw[2]) === 1 };
 }
 
 /**
@@ -134,31 +160,33 @@ function readPair(raw: unknown): { count: number; ttlMs: number } | null {
  * once however many arrive simultaneously. Callers that turn out not to owe the
  * attempt give it back with `release`.
  *
- * The increment happens whether or not the attempt is allowed, which is what
- * makes a sustained attacker stay locked out for the rest of the window.
+ * A refused attempt changes nothing — not the counter, not the TTL. The bucket
+ * holds outstanding reservations, so it never exceeds the limit, and the window
+ * still ends when the first reservation said it would.
  */
 export async function consume(policy: RateLimitPolicy, subject: string): Promise<RateLimitResult> {
   const redis = getRedis();
   if (!redis) return unavailable(policy);
 
   const key = rateLimitKey(policy.id, subject);
+  const limit = String(policy.limit);
   const windowMs = String(policy.windowSeconds * 1000);
 
   try {
     let raw: unknown;
     try {
       // EVALSHA first so the script body is not resent on every request.
-      raw = await redis.evalsha(LUA_CONSUME_SHA, 1, key, windowMs);
+      raw = await redis.evalsha(LUA_CONSUME_SHA, 1, key, limit, windowMs);
     } catch (error) {
       // NOSCRIPT simply means this Redis has not cached it yet — send it once.
       if (!(error instanceof Error) || !error.message.includes("NOSCRIPT")) throw error;
-      raw = await redis.eval(LUA_CONSUME, 1, key, windowMs);
+      raw = await redis.eval(LUA_CONSUME, 1, key, limit, windowMs);
     }
 
-    const pair = readPair(raw);
-    if (!pair) return unavailable(policy);
+    const reply = readReply(raw);
+    if (!reply) return unavailable(policy);
 
-    return decide(policy, pair.count, pair.ttlMs);
+    return decide(policy, reply.count, reply.ttlMs, reply.admitted);
   } catch {
     // Never surfaces the driver error: a connection string can carry credentials.
     return unavailable(policy);

@@ -31,20 +31,38 @@ cannot end up limited on one path and open on the other.
 ### Fixed window, enforced by one Lua script
 
 ```lua
-local current = redis.call('INCR', KEYS[1])
-if current == 1 then
-  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+local limit = tonumber(ARGV[1])
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+
+if current >= limit then
+  return { current, redis.call('PTTL', KEYS[1]), 0 }   -- refused, nothing changed
 end
-return { current, redis.call('PTTL', KEYS[1]) }
+
+local updated = redis.call('INCR', KEYS[1])
+if updated == 1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return { updated, redis.call('PTTL', KEYS[1]), 1 }
 ```
 
-`INCR` followed by a separate `EXPIRE` has a real failure mode: if the process dies between the two
-commands, the key survives with no TTL and that subject is locked out permanently. Redis runs a
-script to completion without interleaving another client, so the pair is atomic.
+Reading the count and then comparing it in application code would not be atomic — that is the whole
+reason the comparison lives inside the script. Redis runs a script to completion without interleaving
+another client, so concurrent callers are serialized and exactly `limit` of them are admitted.
 
-The TTL is set **only on the first increment**. Refreshing it every call would let a subject under
-sustained load extend their own window indefinitely, so it would never reset while they kept
-knocking.
+`INCR` followed by a separate `EXPIRE` has a real failure mode too: if the process dies between the
+two commands, the key survives with no TTL and that subject is locked out permanently. Inside the
+script the pair cannot be separated.
+
+The TTL is set **only when the first reservation creates the key**, and never refreshed. Refreshing
+it would let a subject under sustained load extend their own window indefinitely, so it would never
+reset while they kept knocking.
+
+**The counter is held capacity, not attempt volume.** A refused attempt touches neither the counter
+nor the TTL, so the bucket never exceeds the limit and always says how many reservations are
+actually outstanding. An earlier version incremented on every attempt; that made the number
+meaningless once refunds entered the picture, because a success returning its own unit could leave
+the count above the limit with nothing held, and freed slots stayed burned for the rest of the
+window.
 
 Fixed window is chosen knowingly. Up to `2 × limit` requests can land across a window boundary. For
 an abuse ceiling that is acceptable, and it costs one integer per subject; a sliding window needs a

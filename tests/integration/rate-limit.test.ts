@@ -192,7 +192,9 @@ describe("atomicity", () => {
 
     // Every concurrent caller saw the same window; none of them lost the TTL.
     expect(await redis.pttl(key)).toBeGreaterThan(0);
-    expect(Number(await redis.get(key))).toBe(40);
+    // The counter holds outstanding reservations, so it saturates at the limit.
+    // The 35 refused callers changed nothing.
+    expect(Number(await redis.get(key))).toBe(5);
   });
 
   it("never leaves a key without an expiry, even under concurrency", async () => {
@@ -484,8 +486,11 @@ describe("credential reservation under concurrency", () => {
 
     // D. Exactly the allowance is committed — not 20, and not fewer than 5.
     expect(log.committedFailures).toBe(AUTH.limit);
-    expect(finalCount).toBe(SUBMITTED);
-    expect(finalCount).toBeGreaterThanOrEqual(AUTH.limit);
+    // The counter is held capacity, not attempt volume: the 15 refused attempts
+    // never touched it. If it read 20 the bucket would no longer say how many
+    // reservations are outstanding, and a refund could leave it above the limit
+    // with nothing actually held.
+    expect(finalCount).toBe(AUTH.limit);
 
     // E. The bucket expires on its own.
     expect(ttl).toBeGreaterThan(0);
@@ -495,6 +500,104 @@ describe("credential reservation under concurrency", () => {
     const after = await reserve("signIn", { headers: new Headers(), identifier });
     expect(after.kind).toBe("limit");
     if (after.kind === "limit") expect(after.retryAfterSeconds).toBeGreaterThan(0);
+  });
+
+  it("B: repeated denied attempts change neither the count nor the TTL", async () => {
+    const identifier = `saturate-${randomUUID()}@northstar.test`;
+    const key = authKeyFor(identifier);
+    const log = newLog();
+
+    for (let i = 0; i < AUTH.limit; i += 1) {
+      await attemptSignIn(identifier, "invalid-credentials", log, { verifyMs: 1 });
+    }
+    expect(Number(await redis.get(key))).toBe(AUTH.limit);
+
+    const ttlAfterFilling = await redis.pttl(key);
+
+    // Keep knocking well past the limit.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    for (let i = 0; i < 25; i += 1) {
+      const result = await attemptSignIn(identifier, "invalid-credentials", log, { verifyMs: 1 });
+      expect(result).toBe("refused");
+    }
+
+    const ttlAfterKnocking = await redis.pttl(key);
+
+    // The count is untouched...
+    expect(Number(await redis.get(key))).toBe(AUTH.limit);
+    // ...and the TTL is still counting down from the first reservation, never
+    // refreshed — otherwise a sustained caller could hold their own lockout open
+    // forever, or push the reset further away with every rejected attempt.
+    expect(ttlAfterKnocking).toBeLessThan(ttlAfterFilling);
+    expect(ttlAfterKnocking).toBeGreaterThan(0);
+  });
+
+  it("C: a mixed burst leaves only the reservations that were actually kept", async () => {
+    const identifier = `mixed-burst-${randomUUID()}@northstar.test`;
+    const key = authKeyFor(identifier);
+    const log = newLog();
+    const SUBMITTED = 20;
+    const SUCCESSES = 2;
+
+    // Outcomes are assigned in admission order, so exactly the first two callers
+    // through the gate succeed and the remaining three fail.
+    let admittedIndex = 0;
+
+    async function mixedAttempt(): Promise<"verified" | "refused" | "unavailable"> {
+      log.submitted += 1;
+      const attempt = await reserve("signIn", { headers: new Headers(), identifier });
+
+      if (attempt.kind === "limit") {
+        log.refusedBeforeVerification += 1;
+        return "refused";
+      }
+      if (attempt.kind === "unavailable") {
+        log.unavailable += 1;
+        return "unavailable";
+      }
+
+      const outcome: CredentialOutcome =
+        admittedIndex++ < SUCCESSES ? "authenticated" : "invalid-credentials";
+      log.admitted += 1;
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await settleCredentialAttempt(attempt.reservation, outcome);
+
+      if (outcome === "invalid-credentials") log.committedFailures += 1;
+      else log.released += 1;
+
+      return "verified";
+    }
+
+    await Promise.all(Array.from({ length: SUBMITTED }, () => mixedAttempt()));
+
+    const finalCount = Number(await redis.get(key));
+    console.log(
+      `[mixed burst] submitted=${String(log.submitted)} ` +
+        `admitted=${String(log.admitted)} ` +
+        `refusedBeforeVerification=${String(log.refusedBeforeVerification)} ` +
+        `committedFailures=${String(log.committedFailures)} ` +
+        `released=${String(log.released)} ` +
+        `redisCount=${String(finalCount)} ttlMs=${String(await redis.pttl(key))}`,
+    );
+
+    expect(log.admitted).toBe(AUTH.limit);
+    expect(log.refusedBeforeVerification).toBe(SUBMITTED - AUTH.limit);
+    expect(log.released).toBe(SUCCESSES);
+    expect(log.committedFailures).toBe(AUTH.limit - SUCCESSES);
+
+    // Only the definitive failures remain held. The 15 refused attempts
+    // contributed nothing at all.
+    expect(finalCount).toBe(AUTH.limit - SUCCESSES);
+
+    // And because the bucket is back below the limit, the freed slots are usable
+    // rather than being permanently burned by the refused attempts.
+    const next = await reserve("signIn", { headers: new Headers(), identifier });
+    expect(next.kind).toBe("allow");
+    if (next.kind === "allow") {
+      await settleCredentialAttempt(next.reservation, "authenticated");
+    }
+    expect(Number(await redis.get(key))).toBe(AUTH.limit - SUCCESSES);
   });
 
   it("G: a new attempt is admitted once the window expires", async () => {

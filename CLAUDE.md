@@ -156,9 +156,14 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
   Adding a number anywhere else is the mistake this structure exists to prevent.
 - Enforcement always sits **after** the auth guard and **before** any expensive work, so a rejected
   request never spends a legitimate user's budget.
-- **Increment and expiry are one Lua script** (ADR 0008). Never split them: a crash between `INCR`
-  and `EXPIRE` leaves a key with no TTL, which is a permanent lockout. The TTL is set only on the
-  first increment so a subject cannot extend their own window.
+- **The limit comparison, the increment, and the expiry are one Lua script** (ADR 0008). Never split
+  them: comparing in application code is not atomic, and a crash between `INCR` and `EXPIRE` leaves a
+  key with no TTL — a permanent lockout. The TTL is set only when the first reservation creates the
+  key, never refreshed, so a subject cannot extend their own window.
+- **The counter is held capacity, not attempt volume.** It saturates at the limit: a refused attempt
+  changes neither the count nor the TTL. Incrementing past the limit would make the number
+  meaningless once a refund is possible — a success returning its own unit could leave the count
+  above the limit with nothing actually held, and freed slots would stay burned.
 - **Failure mode is per policy.** Credential, generation, and admin policies fail **closed**; a
   Redis outage there returns **503 `SERVICE_UNAVAILABLE`**, never 429 — a 429 blames the caller for
   our outage. Ordinary reads fail **open** (ADR 0004).
