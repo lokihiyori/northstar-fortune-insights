@@ -8,6 +8,9 @@ import { runGuidancePipeline } from "@/features/guidance/orchestrator";
 import { countReportsThisPeriod, recordReportUsage } from "@/features/guidance/usage";
 import { prisma } from "@/lib/db/prisma";
 import { enforceApi } from "@/lib/rate-limit/enforce";
+import { setContextActor } from "@/lib/observability/context";
+import { withApiLogging } from "@/lib/observability/handler";
+import { logger } from "@/lib/observability/logger";
 import { getCompassProfile } from "@/features/onboarding/queries";
 import { PROMPT_NAME, PROMPT_VERSION } from "@/features/guidance/ai/prompt";
 import type { GuidanceInput, NormalizedConstraint } from "@/features/guidance/rules/types";
@@ -23,10 +26,11 @@ const MAX_BODY_BYTES = 16 * 1024;
  * The pipeline runs after the response is sent rather than holding the request
  * open; the client polls GET /api/v1/guidance/:id for named stages.
  */
-export async function POST(request: Request) {
+export const POST = withApiLogging("/api/v1/guidance", async (request: Request) => {
   const auth = await requireApiUser();
   if (!auth.ok) return auth.response;
   const { user } = auth;
+  setContextActor(user.id);
 
   // After authentication so a rejected request never spends someone's budget,
   // and before parsing so an abusive caller cannot make us do work first.
@@ -135,6 +139,15 @@ export async function POST(request: Request) {
     includeProfile: parsed.data.includeProfile,
   });
 
+  // Operational counterpart to the analytics event above. Topic is an enum and
+  // the counts are integers; the question itself is never a log field.
+  logger.info("guidance.accepted", {
+    generationId: created.id,
+    topic: parsed.data.topic,
+    criteriaCount: parsed.data.criteria.length,
+    includeProfile: parsed.data.includeProfile,
+  });
+
   after(async () => {
     const startedAt = Date.now();
     const result = await runGuidancePipeline(created.id, input);
@@ -146,10 +159,23 @@ export async function POST(request: Request) {
         topic: parsed.data.topic,
         latencyMs: Date.now() - startedAt,
       });
+      logger.info("guidance.completed", {
+        generationId: created.id,
+        topic: parsed.data.topic,
+        durationMs: Date.now() - startedAt,
+      });
     } else {
       await recordEvent("guidance_failed", user.id, { code: result.code });
+      // The failure *code* is a closed enum from the pipeline. No provider
+      // payload, model output, or exception message is recorded.
+      logger.warn("guidance.failed", {
+        generationId: created.id,
+        topic: parsed.data.topic,
+        failureCode: result.code,
+        durationMs: Date.now() - startedAt,
+      });
     }
   });
 
   return apiSuccess({ requestId: created.id }, { status: 202 });
-}
+});

@@ -4,6 +4,9 @@ import { getStripe, webhookSecret } from "@/features/billing/stripe";
 import { applySubscriptionState, mapStripeStatus } from "@/features/billing/subscription";
 import { recordEvent } from "@/features/analytics/events";
 import { prisma } from "@/lib/db/prisma";
+import { withApiLogging } from "@/lib/observability/handler";
+import { logFailure } from "@/lib/observability/logger";
+import { captureException } from "@/lib/observability/monitoring";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,7 +24,7 @@ export const dynamic = "force-dynamic";
  * Always returns 200 once handled, so Stripe stops retrying. Failures are
  * logged and surfaced as 500 so Stripe *does* retry.
  */
-export async function POST(request: Request) {
+export const POST = withApiLogging("/api/v1/webhooks/stripe", async (request: Request) => {
   const stripe = getStripe();
   const secret = webhookSecret();
 
@@ -64,11 +67,17 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ received: true });
   } catch (error) {
-    // Not recorded as processed, so Stripe's retry will run it again.
-    console.error(`Stripe webhook ${event.type} (${event.id}) failed:`, error);
+    // Not recorded as processed, so Stripe's retry will run it again. The event
+    // *type* and id are Stripe's own identifiers and carry no customer data;
+    // the exception and the payload stay out of the log.
+    logFailure("webhook.processing_failed", "internal", {
+      eventType: event.type,
+      eventId: event.id,
+    });
+    captureException(error, { category: "internal", fields: { eventType: event.type } });
     return NextResponse.json({ error: "Processing failed." }, { status: 500 });
   }
-}
+});
 
 async function handleEvent(event: Stripe.Event): Promise<void> {
   switch (event.type) {

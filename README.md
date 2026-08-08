@@ -391,6 +391,57 @@ values are substituted. Test subjects are unique per test, and global teardown c
 `northstar:rl:v1:*` keyspace so repeated runs stay independent. `pnpm test:integration` exercises
 the Lua script, expiry, and concurrency against a real Redis.
 
+### Observability
+
+Recorded in [ADR 0009](docs/adr/0009-observability.md).
+
+**Request correlation.** Every `/api/v1/*` response carries `X-Request-ID`, and the same id appears
+in the error envelope's `requestId` and in every log line for that request — so a user quoting a
+reference lands an operator on the right line. A client may supply its own `X-Request-ID`; it is
+honoured only if it matches `^[A-Za-z0-9_-]{8,64}$` and is replaced otherwise.
+
+**Log schema.** One JSON object per line in production. Fields are allow-listed, never denied:
+
+| Field                          | Present          | Meaning                                           |
+| ------------------------------ | ---------------- | ------------------------------------------------- |
+| `timestamp`, `level`, `event`  | always           | ISO-8601, `debug`–`error`, closed event name      |
+| `requestId`, `method`, `route` | inside a request | route _template_, never a raw URL                 |
+| `actorId`                      | where justified  | opaque user cuid, never an email                  |
+| `status`, `durationMs`         | HTTP events      |                                                   |
+| `errorCategory`, `errorType`   | failures         | coarse bucket, exception name (never its message) |
+
+Event names: `startup.*`, `http.request_completed|failed`, `auth.sign_in_refused|sign_up_refused`,
+`ratelimit.refused|backend_unavailable|degraded_open`, `guidance.accepted|completed|failed`,
+`source.created|updated|ingested|reviewed|published|retired`, `readiness.checked`, `error.captured`,
+`monitoring.capture_failed`, `analytics.write_failed`, `billing.request_failed`,
+`webhook.processing_failed`.
+
+**What never reaches a log**: passwords, `AUTH_SECRET`, `DATABASE_URL`, `REDIS_URL`, Stripe/OpenAI
+keys, authorization or cookie headers, session tokens, complete email addresses, question text,
+report content, source text, request bodies, query strings, Redis keys, and exception messages.
+Objects are never serialized — a field must be a primitive with an allowed name. `LOG_LEVEL`
+(`debug`|`info`|`warn`|`error`) tunes verbosity.
+
+**Liveness vs readiness** — two endpoints, two questions:
+
+|              | `/api/v1/health`      | `/api/v1/ready`          |
+| ------------ | --------------------- | ------------------------ |
+| Question     | is the process alive? | can it serve traffic?    |
+| Dependencies | **none**              | PostgreSQL + Redis       |
+| Codes        | always 200            | 200 ready, 503 not ready |
+
+A 503 from readiness means PostgreSQL or Redis is unreachable: the body says which
+(`{status, checks: {database, cache}}`, values `ok`/`unavailable`) and nothing else — no host, port,
+credential, or driver message. Redis counts because rate limiting is fail-closed for sign-in
+(ADR 0008), so an instance without it cannot authenticate anyone. Liveness deliberately keeps
+answering 200 during either outage, so a dependency incident does not restart every instance.
+
+> **No external monitoring backend is configured.** `captureException` / `captureMessage` exist
+> behind a vendor-neutral interface, and the default adapter writes a structured log line — capture
+> works and is visible, but nothing leaves the process. There is no alerting, retention, or
+> dashboard. Attaching a vendor means writing one adapter and calling `setMonitoringAdapter` once
+> from `instrumentation.ts`; no business code changes. That is Phase 8D work.
+
 ## Troubleshooting: port 5432 already in use
 
 The Docker services publish on **55432** (PostgreSQL) and **56379** (Redis), not the defaults.

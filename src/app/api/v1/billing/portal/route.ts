@@ -2,14 +2,19 @@ import { requireApiUser } from "@/features/auth/guards";
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { getStripe, isBillingConfigured } from "@/features/billing/stripe";
 import { getSubscription } from "@/features/billing/subscription";
+import { setContextActor } from "@/lib/observability/context";
+import { withApiLogging } from "@/lib/observability/handler";
+import { logFailure } from "@/lib/observability/logger";
+import { captureException } from "@/lib/observability/monitoring";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** Customer Portal session so cancellation and card changes stay with Stripe. */
-export async function POST() {
+export const POST = withApiLogging("/api/v1/billing/portal", async () => {
   const auth = await requireApiUser();
   if (!auth.ok) return auth.response;
+  setContextActor(auth.user.id);
 
   const stripe = getStripe();
   if (!stripe || !isBillingConfigured()) {
@@ -31,7 +36,8 @@ export async function POST() {
 
     return apiSuccess({ url: session.url });
   } catch (error) {
-    console.error("Stripe portal failed:", error);
+    logFailure("billing.request_failed", "dependency_unavailable", { operation: "portal" });
+    captureException(error, { category: "dependency_unavailable" });
     return apiError("INTERNAL", "We could not open the billing portal.");
   }
-}
+});

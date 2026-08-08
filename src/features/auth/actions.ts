@@ -13,6 +13,8 @@ import {
   reserve,
   settleCredentialAttempt,
 } from "@/lib/rate-limit/enforce";
+import { runWithActionContext } from "@/lib/observability/context";
+import { logger } from "@/lib/observability/logger";
 
 /**
  * Returned to the client so the form can re-render with accessible errors and
@@ -52,7 +54,19 @@ function isRedirect(error: unknown): boolean {
   );
 }
 
+/**
+ * Server Actions do not pass through the Route Handler wrapper, so they cannot
+ * inherit its request context. Each one opens its own, which is what gives its
+ * log lines a correlation id.
+ */
 export async function registerAction(
+  previous: AuthFormState,
+  formData: FormData,
+): Promise<AuthFormState> {
+  return runWithActionContext("auth.registerAction", () => performRegister(previous, formData));
+}
+
+async function performRegister(
   _previous: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
@@ -80,6 +94,9 @@ export async function registerAction(
     identifier: parsed.data.email,
   });
   if (limited) {
+    // Category only. Whether the address is already registered is not recorded:
+    // a log that answers that question is an enumeration oracle in a file.
+    logger.warn("auth.sign_up_refused", { reason: "rate_limited" });
     return { status: "error", message: limited.message, values };
   }
 
@@ -130,9 +147,13 @@ export async function registerAction(
 }
 
 export async function signInAction(
-  _previous: AuthFormState,
+  previous: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
+  return runWithActionContext("auth.signInAction", () => performSignIn(previous, formData));
+}
+
+async function performSignIn(_previous: AuthFormState, formData: FormData): Promise<AuthFormState> {
   const raw = {
     email: readString(formData, "email"),
     password: readString(formData, "password"),
@@ -169,6 +190,9 @@ export async function signInAction(
     // this cannot be used to tell a real address from an unregistered one. A
     // Redis outage says "unavailable" here rather than "too many attempts".
     const refusal = actionLimitResult(attempt);
+    logger.warn("auth.sign_in_refused", {
+      reason: attempt.kind === "limit" ? "rate_limited" : "backend_unavailable",
+    });
     return { status: "error", message: refusal?.message ?? WRONG_CREDENTIALS, values };
   }
 
@@ -196,6 +220,13 @@ export async function signInAction(
     );
 
     if (error instanceof AuthError) {
+      // The category distinguishes a wrong password from a provider fault for
+      // us. It never records the address, and never records whether an account
+      // with that address exists.
+      logger.warn("auth.sign_in_refused", {
+        reason: definitivelyWrong ? "invalid_credentials" : "provider_error",
+      });
+
       return {
         status: "error",
         // Deliberately does not say which of the two was wrong. A provider fault

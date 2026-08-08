@@ -3,6 +3,10 @@ import { apiError, apiSuccess } from "@/lib/api/response";
 import { getStripe, isBillingConfigured, plusPriceId } from "@/features/billing/stripe";
 import { getSubscription, linkStripeCustomer } from "@/features/billing/subscription";
 import { recordEvent } from "@/features/analytics/events";
+import { setContextActor } from "@/lib/observability/context";
+import { withApiLogging } from "@/lib/observability/handler";
+import { logFailure } from "@/lib/observability/logger";
+import { captureException } from "@/lib/observability/monitoring";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,9 +18,10 @@ export const dynamic = "force-dynamic";
  * upgrade. Nothing here grants access; that happens only when the webhook
  * arrives (spec section 13).
  */
-export async function POST() {
+export const POST = withApiLogging("/api/v1/billing/checkout", async () => {
   const auth = await requireApiUser();
   if (!auth.ok) return auth.response;
+  setContextActor(auth.user.id);
 
   const stripe = getStripe();
   const priceId = plusPriceId();
@@ -63,7 +68,10 @@ export async function POST() {
 
     return apiSuccess({ url: session.url });
   } catch (error) {
-    console.error("Stripe checkout failed:", error);
+    // The provider error object can carry request payloads and account
+    // identifiers, so only its category and name leave this scope.
+    logFailure("billing.request_failed", "dependency_unavailable", { operation: "checkout" });
+    captureException(error, { category: "dependency_unavailable" });
     return apiError("INTERNAL", "We could not start checkout. Please try again.");
   }
-}
+});

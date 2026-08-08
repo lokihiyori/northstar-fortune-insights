@@ -2,6 +2,7 @@ import "server-only";
 
 import type { NextResponse } from "next/server";
 import { apiError, type ApiError } from "@/lib/api/response";
+import { logger } from "@/lib/observability/logger";
 import {
   digestIdentifier,
   digestIp,
@@ -92,7 +93,7 @@ function apply(policy: RateLimitPolicy, result: RateLimitResult): EnforcementDec
     if (policy.failureMode === "closed") {
       return { kind: "unavailable", policyId: policy.id };
     }
-    console.warn(`[rate-limit] ${policy.id}: Redis unavailable, continuing (fail-open policy).`);
+    logger.warn("ratelimit.degraded_open", { policyId: policy.id });
   }
 
   return { kind: "allow" };
@@ -240,6 +241,13 @@ export function rateLimitResponse(decision: EnforcementDecision): NextResponse<A
   if (decision.kind === "allow") return null;
 
   if (decision.kind === "limit") {
+    // The policy id is an internal label, not a secret; it never reaches the
+    // response. The subject is not logged at all — it is a digest of an account
+    // or address, and a log of who was limited is a log of who tried.
+    logger.warn("ratelimit.refused", {
+      policyId: decision.policyId,
+      retryAfterSeconds: decision.retryAfterSeconds,
+    });
     return apiError("RATE_LIMITED", RATE_LIMITED_MESSAGE, {
       headers: { "Retry-After": String(decision.retryAfterSeconds) },
     });
@@ -247,9 +255,7 @@ export function rateLimitResponse(decision: EnforcementDecision): NextResponse<A
 
   // Fail-closed with no Redis. A 429 here would be a lie about the cause, and
   // would tell the user to wait out a window that does not exist.
-  console.warn(
-    `[rate-limit] ${decision.policyId}: Redis unavailable, refusing (fail-closed policy).`,
-  );
+  logger.error("ratelimit.backend_unavailable", { policyId: decision.policyId });
   return apiError("SERVICE_UNAVAILABLE", UNAVAILABLE_MESSAGE, {
     headers: { "Retry-After": "30" },
   });
@@ -278,12 +284,14 @@ export function actionLimitResult(decision: EnforcementDecision): ActionLimitRes
   if (decision.kind === "allow") return null;
 
   if (decision.kind === "limit") {
+    logger.warn("ratelimit.refused", {
+      policyId: decision.policyId,
+      retryAfterSeconds: decision.retryAfterSeconds,
+    });
     return { message: RATE_LIMITED_MESSAGE, retryAfterSeconds: decision.retryAfterSeconds };
   }
 
-  console.warn(
-    `[rate-limit] ${decision.policyId}: Redis unavailable, refusing (fail-closed policy).`,
-  );
+  logger.error("ratelimit.backend_unavailable", { policyId: decision.policyId });
   return { message: UNAVAILABLE_MESSAGE, retryAfterSeconds: 30 };
 }
 

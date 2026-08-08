@@ -1,5 +1,6 @@
 import "server-only";
 
+import { logger } from "@/lib/observability/logger";
 import { configuredProviders, parseServerEnv, type ServerEnv } from "./schema";
 
 /**
@@ -31,19 +32,20 @@ export function assertServerEnv(): ServerEnv {
   const env = serverEnv();
 
   const providers = configuredProviders(env);
-  // Names only. Whether a provider is on is operationally useful; its
-  // credentials are not, and must never reach a log.
-  console.info(
-    `[env] validated for NODE_ENV=${env.NODE_ENV}. ` +
-      `Optional providers enabled: ${providers.length > 0 ? providers.join(", ") : "none"}.`,
-  );
 
-  if (!providers.includes("openai")) {
-    console.info("[env] No OPENAI_API_KEY — using the deterministic guidance provider.");
-  }
-  if (!providers.includes("stripe")) {
-    console.info("[env] Stripe not configured — the upgrade path is disabled.");
-  }
+  /**
+   * Provider *names* only. Whether a provider is switched on is operationally
+   * useful; its credentials are not and must never reach a log.
+   *
+   * A startup event, not an HTTP request event: there is no request context at
+   * boot, so this line carries no `requestId` by design.
+   */
+  logger.info("startup.env_validated", {
+    nodeEnv: env.NODE_ENV,
+    providers: providers.length > 0 ? providers.join(",") : "none",
+    guidanceProvider: providers.includes("openai") ? "openai" : "deterministic",
+    billingEnabled: providers.includes("stripe"),
+  });
 
   return env;
 }

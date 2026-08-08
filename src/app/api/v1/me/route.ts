@@ -1,15 +1,19 @@
 import { requireApiUser } from "@/features/auth/guards";
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { enforceApi } from "@/lib/rate-limit/enforce";
+import { setContextActor } from "@/lib/observability/context";
+import { withApiLogging } from "@/lib/observability/handler";
+import { captureException } from "@/lib/observability/monitoring";
 import { compassCompletion, getCompassProfile } from "@/features/onboarding/queries";
 
 export const runtime = "nodejs";
 // Session-dependent, so it must never be cached or statically prerendered.
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request) {
+export const GET = withApiLogging("/api/v1/me", async (request: Request) => {
   const authResult = await requireApiUser();
   if (!authResult.ok) return authResult.response;
+  setContextActor(authResult.user.id);
 
   // An ordinary read, so this limit is **fail-open**: if Redis is down the
   // account still loads. PostgreSQL is the source of truth and a cache outage
@@ -49,8 +53,11 @@ export async function GET(request: Request) {
         maxActivePlans: 1,
       },
     });
-  } catch {
-    // Never leak a Prisma error or stack trace to the client.
+  } catch (error) {
+    // Never leak a Prisma error or stack trace to the client. The exception
+    // itself goes to the monitoring boundary, which records its *name* and the
+    // request id — never its message, which can carry a connection string.
+    captureException(error, { category: "internal" });
     return apiError("INTERNAL", "We could not load your account right now.");
   }
-}
+});

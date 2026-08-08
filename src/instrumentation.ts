@@ -23,9 +23,15 @@ export async function register(): Promise<void> {
         ? (error.issues as string[])
         : [error instanceof Error ? error.message : String(error)];
 
-    // Variable names and rules only — never the offending values.
+    // Two audiences, deliberately. The human-readable block is what an operator
+    // reads in a terminal or a container's first log page; the structured event
+    // is what a collector counts. Both carry variable names and rules only —
+    // never the offending values.
     console.error("[env] Startup validation failed:");
     for (const issue of issues) console.error(`  - ${issue}`);
+
+    const { logger } = await import("./lib/observability/logger");
+    logger.error("startup.env_invalid", { issueCount: issues.length });
 
     const isProductionRuntime =
       process.env.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build";
@@ -64,8 +70,17 @@ export async function register(): Promise<void> {
 async function openRedisConnection(): Promise<void> {
   try {
     const { getRedis } = await import("./lib/redis/client");
+    const { logger } = await import("./lib/observability/logger");
+
     const redis = getRedis();
-    if (!redis || redis.status === "ready") return;
+    if (!redis) {
+      logger.warn("startup.cache_unavailable", { reason: "not_configured" });
+      return;
+    }
+    if (redis.status === "ready") {
+      logger.info("startup.cache_ready", {});
+      return;
+    }
 
     await new Promise<void>((resolve) => {
       const done = () => {
@@ -76,6 +91,12 @@ async function openRedisConnection(): Promise<void> {
       const timer = setTimeout(done, 2_000);
       redis.once("ready", done);
     });
+
+    // Read into a widened local: TypeScript narrowed `status` at the early
+    // return above and cannot see that awaiting may have changed it.
+    const status: string = redis.status;
+    if (status === "ready") logger.info("startup.cache_ready", {});
+    else logger.warn("startup.cache_unavailable", { reason: "connect_timeout" });
   } catch {
     // Already reported by the client's own error handler; startup continues.
   }

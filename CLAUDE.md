@@ -186,6 +186,34 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
   "unknown" bucket — one attacker would exhaust everyone's allowance.
 - Tests run the real policies. Do not add a switch that disables limiting; isolate by subject.
 
+## Observability (Phase 8C)
+
+- **`console` is not the logging interface.** Server code calls
+  `src/lib/observability/logger`; `no-console` is an ESLint **error** outside the logger itself,
+  `instrumentation.ts`, the client error boundary, and test/seed tooling.
+- **Fields are allow-listed, never denied** (`observability/redact.ts`). Credential-shaped names are
+  refused unconditionally, content-shaped names only survive with a measurement suffix (`reportId`,
+  `chunkCount`), values must be primitives, and **objects are never walked**. Exceptions contribute
+  their name, never their message.
+- **One request context**, carried by `AsyncLocalStorage` in `observability/context.ts`. Never use a
+  module-level variable — it is shared across concurrent requests and would stamp one request's id
+  onto another's log line. Route Handlers get it from `withApiLogging`; Server Actions must open
+  their own with `runWithActionContext`.
+- `apiError()` reads `currentRequestId()`, so the envelope, the `X-Request-ID` header, and the log
+  line always agree. Do not generate an id anywhere else.
+- **An incoming `X-Request-ID` is validated, not sanitized** — strict pattern or replaced. It lands
+  in a header, a body, and a log line, so a newline in it would forge a log entry.
+- **Liveness never touches a dependency.** `/api/v1/health` stays 200 during any outage;
+  `/api/v1/ready` is the endpoint that probes PostgreSQL and Redis, with bounded timeouts, and
+  returns 503. Redis counts because sign-in is fail-closed on it (ADR 0008).
+- Readiness responses name dependencies abstractly and never expose a host, port, credential, or
+  driver message. It is unauthenticated and must not be rate limited.
+- **Monitoring is vendor-neutral and no vendor is configured.** Call `captureException` /
+  `captureMessage`; never import an SDK into business code. A capture failure is swallowed — it must
+  never fail a request.
+- Success logging is off for `/api/v1/health`, `/api/v1/ready`, and the polled generation status
+  route. Failures still log everywhere.
+
 ## Current phase
 
 **Phases 0–7 complete and verified against a live database**, with one explicit exception below.

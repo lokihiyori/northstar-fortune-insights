@@ -1,6 +1,9 @@
 import { requireApiAdmin } from "@/features/auth/guards";
 import { apiError, apiSuccess, fieldErrorsFrom } from "@/lib/api/response";
 import { enforceApi } from "@/lib/rate-limit/enforce";
+import { setContextActor } from "@/lib/observability/context";
+import { withApiLogging } from "@/lib/observability/handler";
+import { logger } from "@/lib/observability/logger";
 import { createSource } from "@/features/sources/service";
 import { createSourceSchema } from "@/features/sources/validation";
 import { listSourcesForAdmin } from "@/features/sources/queries";
@@ -17,9 +20,10 @@ const MAX_BODY_BYTES = 256 * 1024;
  * Handler is its own entry point. A signed-in non-admin gets the standard 403
  * envelope, not a redirect, because an API must answer with a status code.
  */
-export async function GET() {
+export const GET = withApiLogging("/api/v1/admin/sources", async () => {
   const auth = await requireApiAdmin();
   if (!auth.ok) return auth.response;
+  setContextActor(auth.user.id);
 
   const sources = await listSourcesForAdmin();
 
@@ -36,11 +40,12 @@ export async function GET() {
       citationCount: source._count.citations,
     })),
   );
-}
+});
 
-export async function POST(request: Request) {
+export const POST = withApiLogging("/api/v1/admin/sources", async (request: Request) => {
   const auth = await requireApiAdmin();
   if (!auth.ok) return auth.response;
+  setContextActor(auth.user.id);
 
   // Same ceiling as the admin UI's server action, applied here because a Route
   // Handler is its own entry point — exactly like the authorization check above.
@@ -77,5 +82,9 @@ export async function POST(request: Request) {
     return apiError(conflict ? "CONFLICT" : "VALIDATION_FAILED", result.reason);
   }
 
+  // Ids and the topic enum only. Title, publisher, URL, and content stay out of
+  // the log: source text is evidence, and evidence is not operational data.
+  logger.info("source.created", { sourceId: result.value.id, topic: parsed.data.topic });
+
   return apiSuccess({ id: result.value.id }, { status: 201 });
-}
+});

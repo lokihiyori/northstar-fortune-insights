@@ -1,6 +1,8 @@
 import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
+import { logFailure } from "@/lib/observability/logger";
+import { errorName } from "@/lib/observability/redact";
 import { stripPrivateProperties, type EventName, type EventProperties } from "./event-names";
 
 export { EVENT_NAMES } from "./event-names";
@@ -25,7 +27,12 @@ export async function recordEvent(
       },
     });
   } catch (error) {
-    // Analytics must never break a user flow.
-    console.error(`Failed to record analytics event ${eventName}:`, error);
+    // Analytics must never break a user flow. The event *name* is a closed enum
+    // and safe; the properties are not re-logged, since the failure is about
+    // the write and not about what was being written.
+    logFailure("analytics.write_failed", "internal", {
+      analyticsEvent: eventName,
+      errorType: errorName(error),
+    });
   }
 }

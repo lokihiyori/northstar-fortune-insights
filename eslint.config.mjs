@@ -25,14 +25,31 @@ const eslintConfig = defineConfig([
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
-      "no-console": ["warn", { allow: ["warn", "error"] }],
+      /**
+       * Phase 8C: `console` is no longer the logging interface.
+       *
+       * Server code calls `src/lib/observability/logger`, which allow-lists
+       * every field before emission. A stray `console.log(user)` bypasses that
+       * entirely, so the rule is an error rather than a warning — the boundary
+       * is enforced, not remembered.
+       */
+      "no-console": "error",
       eqeqeq: ["error", "smart"],
     },
   },
   {
-    // Seed and test tooling legitimately log to stdout. So do the startup
-    // diagnostics in instrumentation and env validation — that output is the
-    // process boot log an operator reads, not stray debugging.
+    /**
+     * The exceptions, each for a stated reason:
+     *
+     * - the logger itself writes to stdout, because that is what a container
+     *   platform and a log collector already capture;
+     * - `instrumentation.ts` prints a human-readable env failure before the
+     *   logger is worth loading, and that block is what an operator reads on
+     *   the first page of a failed boot;
+     * - the client error boundary runs in the browser, where a server-only
+     *   logger cannot go;
+     * - seed and test tooling legitimately report to a terminal.
+     */
     files: [
       "prisma/**/*.ts",
       "tests/**/*.ts",
@@ -40,7 +57,8 @@ const eslintConfig = defineConfig([
       "*.config.ts",
       "*.config.mts",
       "src/instrumentation.ts",
-      "src/lib/env/server.ts",
+      "src/lib/observability/logger.ts",
+      "src/app/app/error.tsx",
     ],
     rules: {
       "no-console": "off",

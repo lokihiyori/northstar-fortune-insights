@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import type { z } from "zod";
+import { currentRequestId } from "@/lib/observability/context";
+import { newRequestId } from "@/lib/observability/request-id";
 
 /** Spec section 11: the only two response shapes a v1 endpoint may return. */
 export type ApiSuccess<T> = {
@@ -62,8 +63,15 @@ export function apiError(
     headers?: Record<string, string>;
   },
 ): NextResponse<ApiError> {
-  // A request id lets a user quote a failure without us logging their content.
-  const requestId = randomUUID();
+  /**
+   * The *request's* id, not a fresh one per error.
+   *
+   * A user quoting this id must land an operator on the log line for the same
+   * request, and two errors inside one request must not produce two different
+   * ids. Falls back to a generated id only outside a request context — a unit
+   * test, or a code path that has not been wrapped.
+   */
+  const requestId = currentRequestId() ?? newRequestId();
 
   return NextResponse.json(
     {

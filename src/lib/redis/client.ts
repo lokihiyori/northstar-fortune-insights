@@ -1,6 +1,8 @@
 import "server-only";
 
 import Redis from "ioredis";
+import { logger } from "@/lib/observability/logger";
+import { errorName } from "@/lib/observability/redact";
 
 /**
  * Redis access, deliberately fail-open.
@@ -30,8 +32,12 @@ function create(): Redis | null {
 
   // An unhandled 'error' event would crash the process. Redis being
   // unreachable is a degraded mode, not a fatal condition.
+  //
+  // The driver message is deliberately not logged: it embeds the connection
+  // string, which carries the host, port, and any password. The error *name*
+  // and the fact of the outage are what an operator acts on.
   client.on("error", (error: Error) => {
-    console.warn(`Redis unavailable (continuing without cache): ${error.message}`);
+    logger.warn("startup.cache_unavailable", { errorType: errorName(error) });
   });
 
   return client;

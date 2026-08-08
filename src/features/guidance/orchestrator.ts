@@ -1,6 +1,8 @@
 import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
+import { logFailure } from "@/lib/observability/logger";
+import { captureException } from "@/lib/observability/monitoring";
 import { resolveEmbedder, resolveProvider } from "./ai";
 import { PROMPT_NAME, PROMPT_VERSION } from "./ai/prompt";
 import { withTimeout, type GuidanceProvider } from "./ai/provider";
@@ -113,11 +115,16 @@ export async function runGuidancePipeline(
     const validation = validateGeneratedReport(outcome.raw, allowedSourceIds(evidence));
 
     if (!validation.ok) {
-      // Details go to the server log, never to the user.
-      console.error(
-        `Guidance validation failed (${validation.failure.code}) for request ${requestId}:`,
-        validation.failure.details,
-      );
+      // The failure *code* is a closed enum. The details field holds fragments
+      // of model output, which is untrusted content and may echo the user's own
+      // question — so it is counted, not printed.
+      logFailure("guidance.failed", "validation", {
+        generationId: requestId,
+        failureCode: validation.failure.code,
+        detailCount: Array.isArray(validation.failure.details)
+          ? validation.failure.details.length
+          : 0,
+      });
       return await fail(
         requestId,
         validation.failure.code,
@@ -149,7 +156,8 @@ export async function runGuidancePipeline(
 
     return { ok: true, reportId };
   } catch (error) {
-    console.error(`Guidance pipeline crashed for request ${requestId}:`, error);
+    logFailure("guidance.failed", "internal", { generationId: requestId });
+    captureException(error, { category: "internal", fields: { generationId: requestId } });
     return await fail(requestId, "INTERNAL", "Something went wrong while preparing your insight.");
   }
 }

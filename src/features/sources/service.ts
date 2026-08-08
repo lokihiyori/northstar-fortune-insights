@@ -2,6 +2,8 @@ import "server-only";
 
 import { writeAuditLog, type AuditActor } from "@/features/audit/log";
 import { invalidateRetrievalCache } from "@/features/retrieval/cache";
+import { logFailure } from "@/lib/observability/logger";
+import { captureException } from "@/lib/observability/monitoring";
 import { prisma } from "@/lib/db/prisma";
 import { canonicalizeUrl } from "./canonicalize";
 import { chunkStats, ingestSourceContent } from "./ingest";
@@ -155,7 +157,9 @@ export async function ingest(
 
     return { ok: true, value: { chunkCount: result.chunkCount } };
   } catch (error) {
-    console.error(`Ingestion failed for source ${sourceId}:`, error);
+    // The source id is safe; the content being ingested never is.
+    logFailure("source.ingested", "internal", { sourceId, outcome: "failed" });
+    captureException(error, { category: "internal", fields: { sourceId } });
     return { ok: false, reason: "That content could not be ingested." };
   }
 }
