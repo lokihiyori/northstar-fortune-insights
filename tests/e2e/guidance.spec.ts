@@ -69,7 +69,19 @@ test("generates a source-backed insight and converts it into an action plan", as
   );
 
   // The named-stage panel, then automatic navigation once the report is ready.
-  await expect(page.getByRole("heading", { name: "Preparing your insight" })).toBeVisible();
+  //
+  // The panel is *transient*. With the deterministic provider the pipeline can
+  // finish before this assertion runs, and the app has then already navigated
+  // to the finished report — which is a correct outcome, not a failure.
+  // Requiring the interim state made the test depend on winning that race, and
+  // it lost roughly one run in six once the suite grew. Asserting that one of
+  // the two states is present keeps the coverage without the race.
+  await expect(
+    page
+      .getByRole("heading", { name: "Preparing your insight" })
+      .or(page.getByRole("tablist", { name: "Recommended paths" })),
+  ).toBeVisible();
+
   await page.waitForURL(/\/app\/insights\/[a-z0-9]+/, { timeout: 60_000 });
 
   // Report anatomy — spec section 5.5.

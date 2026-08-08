@@ -48,7 +48,11 @@ async function createAdmin(page: Page): Promise<string> {
 
   // The role lives in the JWT, so the session must be reissued for the new
   // role to take effect — a stale token must not grant admin access.
-  await page.goto("/app");
+  //
+  // Sign-up already left the page inside the app shell, so there is no
+  // `goto("/app")` here: that navigation only redirects back to onboarding, and
+  // clicking Sign out while it is still in flight loses the click. Under load
+  // that showed up as a 30s wait for a redirect that had never been triggered.
   await page.getByRole("button", { name: "Sign out" }).click();
   // `commit` rather than the default `load`: this only needs to observe that
   // the sign-out redirect happened, not that every subresource on the landing

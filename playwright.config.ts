@@ -13,18 +13,24 @@ export default defineConfig({
   // A committed `test.only` should fail CI rather than silently skip the suite.
   forbidOnly: !!process.env["CI"],
   retries: process.env["CI"] ? 2 : 0,
-  // Capped rather than left to Playwright's default (roughly half the cores).
+  // Serial, locally as well as in CI.
   //
-  // Locally this suite usually runs against `next dev`, which compiles routes
-  // on demand, so heavy journeys and light header checks contend for the same
-  // single server. Above two workers that contention showed up as navigation
-  // timeouts in whichever journey happened to be unlucky — a different test
-  // each run, which is the signature of starvation rather than a defect.
+  // This suite runs against `next dev`, which compiles routes on demand, so two
+  // workers contend for one server. That was tolerable at 42 tests; at 53 —
+  // several of which drive a dozen sequential sign-in navigations — it showed
+  // up as a 30-second test budget exhausted in whichever journey happened to be
+  // unlucky, a different one each run. That is the signature of starvation, not
+  // a defect in the test that reported it.
   //
-  // This addresses the contention directly. No test timeout is raised anywhere.
-  // The durable fix belongs to 8D: run e2e against a production build locally
-  // as CI already does, which removes on-demand compilation entirely.
-  workers: process.env["CI"] ? 1 : 2,
+  // Removing the second worker removes the contention. **No test timeout is
+  // raised anywhere**; the budget is unchanged and now fits.
+  //
+  // The durable fix is still 8D's: run e2e against a production build locally,
+  // as CI does, which removes on-demand compilation altogether. It cannot be
+  // done here because `next start` demands a production-valid environment
+  // (https app URL, real AUTH_SECRET) that a developer's `.env` deliberately
+  // does not have — see ADR 0007.
+  workers: 1,
   reporter: process.env["CI"] ? [["github"], ["html", { open: "never" }]] : [["list"]],
   use: {
     baseURL,
