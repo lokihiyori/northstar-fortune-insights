@@ -9,7 +9,9 @@ assumptions and trade-offs it carries, and what to do next.
 It is decision support, not fortune-telling. It does not predict outcomes and does not replace
 licensed professional advice.
 
-> **Status: Phases 0–7 complete and verified against a live database.** Repository and tooling;
+> **Status: Phases 0–8E complete.** Phases 0–7 are verified against a live database; Phase 8 adds
+> security posture, rate limiting, observability, CI hardening verified by a real GitHub Actions
+> run, and operations runbooks with a verified backup/restore drill. Repository and tooling;
 > the Quiet Aurora design system and full marketing site; authentication and the
 > Build-your-compass onboarding; the app workspace (guided composer, insight report, scenario
 > comparison, action plans, history); the guidance engine — deterministic rules, pgvector
@@ -39,11 +41,15 @@ licensed professional advice.
 > - **Source ingestion is paste-only, by design.** An admin supplies text; there is no remote URL
 >   fetching, HTML extraction, or scheduled re-ingestion. Fetching remote content raises SSRF and
 >   content-trust questions that deserve their own design.
-> - **The CI workflow has never run remotely.** It now declares PostgreSQL 17 with pgvector and
->   Redis service containers and runs migrations, seed, the integration suite, and all 53 e2e tests
->   — every step verified locally against the same images, including from a database built from
->   scratch. But no GitHub Actions run has executed it, so remote CI is **UNVERIFIED**. See
->   [`docs/CI.md`](docs/CI.md).
+> - **CI is verified remotely** as of Phase 8D — a real GitHub Actions run executes both jobs
+>   against PostgreSQL 17 with pgvector and Redis service containers, applying migrations, seeding,
+>   and running the integration and full e2e suites. See [`docs/CI.md`](docs/CI.md).
+> - **No production backup exists.** A full `pg_dump` → `pg_restore` cycle has been drilled against
+>   real PostgreSQL 17 + pgvector and independently verified (Phase 8E), but no backup provider is
+>   configured, nothing is scheduled, no production restore has been performed, and RPO/RTO remain
+>   TBD. See [`docs/operations/backup-restore.md`](docs/operations/backup-restore.md).
+> - **No deployment exists**, so nothing here has run in production. The trusted-proxy hop count is
+>   still undecided, which leaves the per-IP rate-limit policies inert (ADR 0008).
 > - **CI does not serve the production build during e2e.** `next start` refuses to boot without an
 >   https, non-localhost app URL, and production `Secure` cookies cannot be stored over http, so
 >   authenticated tests cannot pass against it. `pnpm build` proves the production build compiles;
@@ -111,6 +117,8 @@ It is off by default so a real database can never be seeded with an elevated acc
 | `pnpm db:migrate`       | Create and apply a migration                        |
 | `pnpm db:deploy`        | Apply existing migrations (deployment)              |
 | `pnpm db:seed`          | Seed development data                               |
+| `pnpm db:verify`        | Assert extensions, tables, and the pgvector column  |
+| `pnpm audit:ci`         | Dependency audit, gating on high and critical       |
 | `pnpm db:generate`      | Regenerate the Prisma client                        |
 | `pnpm db:studio`        | Prisma Studio                                       |
 
@@ -447,6 +455,52 @@ answering 200 during either outage, so a dependency incident does not restart ev
 > works and is visible, but nothing leaves the process. There is no alerting, retention, or
 > dashboard. Attaching a vendor means writing one adapter and calling `setMonitoringAdapter` once
 > from `instrumentation.ts`; no business code changes. That is Phase 8D work.
+
+## Operations
+
+| Document                                                              | Covers                                                                                                                                                    |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Backup and restore](docs/operations/backup-restore.md)               | `pg_dump`/`pg_restore` patterns, integrity verification, restore validation, cutover and rollback, Redis as disposable state, the restore-drill checklist |
+| [Migrations and rollback](docs/operations/migrations-and-rollback.md) | Pre-deployment checks, `migrate deploy`, forward-only and expand/contract, application vs database rollback, partial-failure recovery, closeout           |
+
+**What Phase 8E proves.** A complete `pg_dump` → `pg_restore` cycle was executed against real
+PostgreSQL 17.10 with pgvector 0.8.6, using two disposable databases and a custom-format archive.
+The restored database was verified to reproduce the source across 24 invariants — extensions,
+all 25 tables, `source_chunks.embedding` as `vector(1536)`, the `_prisma_migrations` ledger hash,
+`migrate status`, corpus counts and lifecycle states, index inventory, and both a corpus fingerprint
+and an embedding fingerprint. `pg_restore` exiting 0 was explicitly _not_ accepted as sufficient.
+
+Running the drill locally (full checklist in the backup document):
+
+```bash
+# 1. Confirm you are on the PostgreSQL 17 pgvector container, not a native 14 on 5432
+docker exec northstar-postgres psql -U northstar -d postgres -tAc "SHOW server_version_num;"
+
+# 2. Create a disposable source, point ONLY the drill at it, and build it the production way
+docker exec northstar-postgres psql -U northstar -d postgres -c "CREATE DATABASE northstar_restore_drill_source_$(date +%s);"
+DATABASE_URL="postgresql://…/northstar_restore_drill_source_…" pnpm db:deploy
+DATABASE_URL="…"  pnpm exec prisma migrate status
+DATABASE_URL="…"  pnpm db:seed
+
+# 3. Back up, checksum, and prove the archive is readable
+docker exec northstar-postgres pg_dump -U northstar --format=custom --no-owner --no-acl --file=/tmp/d.dump <source>
+docker exec northstar-postgres pg_restore --list /tmp/d.dump
+
+# 4. Restore into a NEW database and validate it — never over your development database
+docker exec northstar-postgres psql -U northstar -d postgres -c "CREATE DATABASE northstar_restore_drill_target_…;"
+docker exec northstar-postgres pg_restore -U northstar --exit-on-error --no-owner --no-privileges --dbname=<target> /tmp/d.dump
+DATABASE_URL="…/<target>" pnpm exec prisma migrate status
+DATABASE_URL="…/<target>" pnpm db:verify
+
+# 5. Compare invariants, then drop both databases and delete the dump
+```
+
+> **Limitations.** No production backup provider is configured and no backups are scheduled. No
+> production restore has ever been performed. **RPO and RTO are TBD** — they cannot be estimated
+> from a seeded corpus and need measuring against real data on real hardware. No deployment exists,
+> and the production trusted-proxy hop count remains undecided, so per-IP rate limiting stays inert.
+> Retention, encryption, and off-site storage in the backup document are labelled recommendations,
+> not configuration.
 
 ## Troubleshooting: port 5432 already in use
 

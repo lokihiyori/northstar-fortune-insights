@@ -235,12 +235,43 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - `pnpm audit --audit-level high` gates the build. Never lower the level to go green; never auto-fix
   in CI. Exceptions need a CVE, path, exploitability note, owner, and review date.
 
+## Operations (Phase 8E)
+
+- Runbooks live in `docs/operations/`: `backup-restore.md` and `migrations-and-rollback.md`.
+- **Restores go into a new database, never over the live one.** That is what makes a failed restore
+  recoverable — the original is still there to repoint at.
+- **`pg_restore` exiting 0 is not acceptance.** Compare invariants against the source: extensions,
+  tables, `vector(1536)`, the `_prisma_migrations` ledger hash, `migrate status`, corpus counts and
+  lifecycle states, indexes, plus corpus and embedding fingerprints.
+- Dumps are `--format=custom --no-owner --no-acl`; restores add `--exit-on-error`. Plain SQL runs
+  past failures and leaves a half-restored database that looks fine.
+- **Never write a dump inside the repository**, and never paste a connection string, dump, token, or
+  user record into an incident ticket. The validation queries are aggregates and hashes for exactly
+  this reason.
+- Drill databases must carry the `northstar_restore_drill_` prefix and pass a guard that rejects
+  empty names, `postgres`/`template0`/`template1`, the configured development database, and any name
+  containing an unexpanded variable — before every create _and_ every drop.
+- **Redis is not backed up** and is not a system of record (ADR 0004). It must be _available_, not
+  _restored_, because sign-in is fail-closed on it.
+- Migrations are **forward-only**; there are no down migrations and none should be added. Correct a
+  bad migration with a new one. Use expand/contract for anything a running app would notice.
+- Prefer application rollback. Database restoration is only for when information was destroyed.
+- `prisma migrate resolve` edits the ledger, never the schema. Only after inspecting the database.
+
 ## Current phase
 
-**Phases 0–7 complete and verified against a live database**, with one explicit exception below.
+**Phases 0–8E complete.** Phases 0–7 are verified against a live database, with one explicit
+exception below. Phase 8 adds: 8A security posture, 8B rate limiting, 8C observability, 8D CI
+hardening verified by a real GitHub Actions run, and 8E operations runbooks with a verified
+`pg_dump`/`pg_restore` drill.
+
 Repository and tooling; design system and marketing site; authentication and onboarding; the app
 workspace; the guidance engine; action plans, feedback and report versioning; local billing,
 entitlements and analytics; and admin source ingestion with audit history.
+
+**No deployment exists.** No production backup provider, no schedule, no production restore; RPO and
+RTO are TBD. The trusted-proxy hop count is undecided, so per-IP rate limiting stays inert. Do not
+describe the project as production-ready.
 
 `tests/e2e/guidance.spec.ts` and `tests/e2e/admin.spec.ts` drive the real pipelines against real
 PostgreSQL — no mocks.
