@@ -6,30 +6,59 @@ on:
   pull_request:
   workflow_dispatch:
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+# `pull_request` — never `pull_request_target`. A fork's code must not run with
+# access to this repository's secrets, and pull_request_target does exactly that.
+# This workflow needs no secrets at all: every credential it uses is generated
+# inside the job (see "Generate an ephemeral AUTH_SECRET").
 
-env:
-  # Phase 0 has no runtime database dependency, but `prisma generate` and the
-  # build both read DATABASE_URL. Matches the docker-compose defaults.
-  DATABASE_URL: postgresql://northstar:northstar@localhost:5432/northstar?schema=public
-  NEXT_PUBLIC_APP_URL: http://localhost:3000
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Superseded pushes to a branch are cancelled, but a run on main is allowed to
+  # finish — main's history is what a later bisect reads, and a cancelled run
+  # there leaves a hole in it.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Least privilege. Nothing here writes to the repository, publishes a package,
+# comments on a pull request, or deploys.
+permissions:
+  contents: read
+
+# Actions are pinned to a **major** version throughout this file. That is a
+# deliberate midpoint: full SHA pinning is stricter, but without Dependabot
+# configured to bump those SHAs it degrades into permanently stale actions,
+# which is its own risk. All four actions used here are first-party
+# (actions/*, pnpm/*). A third-party action would warrant full SHA pinning —
+# recorded in docs/CI.md.
 
 jobs:
-  verify:
-    name: Format, lint, typecheck, test, build
+  # ---------------------------------------------------------------------------
+  # A. Everything that needs no services. Fast, and the gate for the slow job.
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Quality (format, lint, types, unit, build, audit)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    env:
+      # `next build` and `prisma generate` both read DATABASE_URL, but neither
+      # connects. This value is a syntactically valid placeholder pointing at
+      # nothing; there is no database in this job by design.
+      DATABASE_URL: postgresql://unused:unused@127.0.0.1:5432/unused?schema=public
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
 
     steps:
       - uses: actions/checkout@v5
 
+      # Must precede setup-node: `cache: pnpm` needs the pnpm binary to resolve
+      # the store path. With no `version` input, this reads `packageManager`
+      # from package.json, so the repository declares its own pnpm version once.
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          # Read from .nvmrc so local and CI agree from a single file. It pins
+          # the major; patch releases are picked up deliberately.
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install dependencies
@@ -44,17 +73,86 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Unit and integration tests
+      # Unit only — no services needed. The database-backed suites are the
+      # other job. (The previous workflow labelled this "unit and integration",
+      # which was wrong: `pnpm test` has always been unit-only.)
+      - name: Unit tests
         run: pnpm test
 
       - name: Build
         run: pnpm build
 
-  e2e:
-    name: End-to-end tests
+      # Fails on high and critical. Never lower this level to make CI green —
+      # see the audit policy in docs/CI.md. Runs last so a vulnerability alert
+      # never masks a broken build.
+      - name: Dependency audit
+        run: pnpm audit --audit-level high
+
+  # ---------------------------------------------------------------------------
+  # B. Real PostgreSQL, real pgvector, real Redis. Nothing here is mocked.
+  # ---------------------------------------------------------------------------
+  database-e2e:
+    name: Integration and end-to-end (real PostgreSQL + Redis)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: verify
+    timeout-minutes: 30
+    # Gated so a formatting slip does not spend the expensive job. The cost is
+    # serialized wall-clock time; the benefit is a clear signal and fewer wasted
+    # minutes on a commit that was never going to pass.
+    needs: quality
+
+    services:
+      postgres:
+        # Same image and major version as docker/docker-compose.yml, so CI and
+        # a developer's machine cannot disagree about pgvector.
+        image: pgvector/pgvector:pg17
+        env:
+          # CI-only, ephemeral, destroyed with the runner. Deliberately not the
+          # local development credential, so neither can ever be mistaken for
+          # the other in a log.
+          POSTGRES_USER: northstar_ci
+          POSTGRES_PASSWORD: northstar_ci_ephemeral
+          POSTGRES_DB: northstar_ci
+        ports:
+          # Standard port. The local stack publishes 55432 to dodge a native
+          # Windows PostgreSQL; a Linux runner has no such conflict.
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U northstar_ci -d northstar_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 10s
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+    env:
+      # 127.0.0.1, not localhost: the runner reaches both services through a
+      # published port, and localhost can resolve to ::1 first, where nothing
+      # is listening.
+      DATABASE_URL: postgresql://northstar_ci:northstar_ci_ephemeral@127.0.0.1:5432/northstar_ci?schema=public
+      REDIS_URL: redis://127.0.0.1:6379
+
+      # Must match the server Playwright starts. `localhost` here on purpose:
+      # Next's dev server treats localhost and 127.0.0.1 as different origins
+      # and blocks its own dev resources across the mismatch.
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+      # Per-IP rate-limit policies stay inert, exactly as in production today.
+      # Raising this would assert a trusted proxy that does not exist (ADR 0008).
+      RATE_LIMIT_TRUSTED_PROXY_HOPS: "0"
+
+      # STRIPE_*, OPENAI_API_KEY, AUTH_GOOGLE_*, NEXT_PUBLIC_POSTHOG_* are all
+      # deliberately unset. That is not an omission: it is what makes CI exercise
+      # the deterministic guidance provider, the deterministic embedder, and the
+      # degraded-billing path that real deployments without keys will hit.
 
     steps:
       - uses: actions/checkout@v5
@@ -63,25 +161,68 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Generated per run and masked before it can reach a log. Never stored,
+      # never a repository secret, worthless once the runner is destroyed.
+      # The `ci-` prefix guarantees it cannot collide with the placeholder
+      # pattern Phase 8A rejects, and the length clears the 32-character floor.
+      - name: Generate an ephemeral AUTH_SECRET
+        run: |
+          SECRET="ci-$(openssl rand -hex 24)"
+          echo "::add-mask::$SECRET"
+          echo "AUTH_SECRET=$SECRET" >> "$GITHUB_ENV"
+
+      # `migrate deploy` — the production-safe command. Never `migrate dev`
+      # (interactive, rewrites history) and never `db push` (skips migrations
+      # entirely, so CI would stop testing what a deployment actually runs).
+      - name: Apply migrations
+        run: pnpm db:deploy
+
+      - name: Verify migration status
+        run: |
+          mkdir -p ci-artifacts
+          pnpm exec prisma migrate status | tee ci-artifacts/migration-status.txt
+
+      # Stronger than "migrate deploy exited 0": asserts the pgvector extension,
+      # every table, and the vector(1536) column actually exist. A missing
+      # extension would otherwise surface much later as a confusing retrieval
+      # failure that reads like a flaky test.
+      - name: Verify schema, extensions, and pgvector column
+        run: pnpm db:verify
+
+      # Idempotent upsert. SEED_ADMIN stays unset: admin.spec.ts promotes its
+      # own account through the database helper, exactly as a real operator
+      # would, so CI never needs a pre-seeded elevated account.
+      - name: Seed
+        run: pnpm db:seed
+
+      - name: Integration tests (real PostgreSQL + Redis)
+        run: pnpm test:integration
+
+      # Only Chromium — the only project in playwright.config.ts.
       - name: Install Playwright browser
-        run: pnpm test:e2e:install
+        run: pnpm exec playwright install --with-deps chromium
 
-      - name: Build
-        run: pnpm build
-
-      - name: Run Playwright tests
+      - name: End-to-end tests
         run: pnpm test:e2e
 
-      - name: Upload report
-        if: ${{ !cancelled() }}
+      # Only on failure, and only these two paths.
+      #
+      # Not uploaded, deliberately: traces (disabled in CI — they capture
+      # Set-Cookie and storage state), raw server logs, .env, database or Redis
+      # dumps, and Playwright's storage-state files. See docs/CI.md.
+      - name: Upload failure artifacts
+        if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
-          path: playwright-report/
+          name: ci-failure-report
+          path: |
+            playwright-report/
+            ci-artifacts/migration-status.txt
           retention-days: 7
+          if-no-files-found: ignore

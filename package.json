@@ -21,6 +21,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium",
+    "audit:ci": "pnpm audit --audit-level high",
     "db:up": "docker compose -f docker/docker-compose.yml --env-file .env up -d",
     "db:down": "docker compose -f docker/docker-compose.yml --env-file .env down",
     "db:reset": "docker compose -f docker/docker-compose.yml --env-file .env down -v",
@@ -28,6 +29,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
+    "db:verify": "node scripts/verify-database.mjs",
     "db:studio": "prisma studio",
     "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "postinstall": "prisma generate"

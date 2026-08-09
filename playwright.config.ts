@@ -34,7 +34,23 @@ export default defineConfig({
   reporter: process.env["CI"] ? [["github"], ["html", { open: "never" }]] : [["list"]],
   use: {
     baseURL,
-    trace: "on-first-retry",
+
+    /**
+     * Traces are collected locally but **not in CI**.
+     *
+     * A trace records every request and response, including `Set-Cookie` and
+     * the resulting storage state — that is session material, and CI artifacts
+     * are downloadable by anyone who can see the run. A developer reproducing
+     * the same failure locally still gets the full trace, which is where that
+     * level of detail is actually useful.
+     *
+     * Screenshots are kept: the e2e suite drives synthetic fixtures, so a
+     * failure screenshot shows invented questions and `@northstar.test`
+     * addresses, never anyone's real data.
+     */
+    trace: process.env["CI"] ? "off" : "on-first-retry",
+    screenshot: "only-on-failure",
+    video: "off",
   },
   projects: [
     {
@@ -43,7 +59,27 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: process.env["CI"] ? `pnpm start --port ${PORT}` : `pnpm dev --port ${PORT}`,
+    /**
+     * `next dev` in CI as well as locally, which is a deliberate reversal.
+     *
+     * This previously ran `pnpm start` in CI. That cannot work, and was proven
+     * twice before it was changed:
+     *
+     *   - `next start` sets NODE_ENV=production, so Phase 8A startup validation
+     *     demands an https, non-localhost `NEXT_PUBLIC_APP_URL`. Given the real
+     *     CI URL the process exits before serving a request.
+     *   - Given a fake https URL to satisfy that check, the server boots but
+     *     authentication is dead over http: production forces `Secure` and the
+     *     `__Secure-` prefix (ADR 0007), which a browser refuses to store on a
+     *     plain-http origin, and Auth.js rejects the mismatched host. Sign-in
+     *     silently yields no cookie and `/api/v1/me` answers 401.
+     *
+     * Serving the production build under test therefore needs real https —
+     * a certificate and a terminating proxy, which is deployment work. Until
+     * then `pnpm build` in the CI quality job is what proves the production
+     * build compiles; this suite exercises behaviour, not the bundle.
+     */
+    command: `pnpm dev --port ${PORT}`,
     url: baseURL,
     reuseExistingServer: !process.env["CI"],
     timeout: 120_000,

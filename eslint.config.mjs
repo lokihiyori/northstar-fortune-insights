@@ -52,6 +52,11 @@ const eslintConfig = defineConfig([
      */
     files: [
       "prisma/**/*.ts",
+      // Operator-facing CLI tooling (`pnpm db:verify`). Its entire output is a
+      // terminal report, and it runs before the app — and therefore the
+      // logger — exists in CI.
+      "scripts/**/*.mjs",
+      "scripts/**/*.ts",
       "tests/**/*.ts",
       "tests/**/*.tsx",
       "*.config.ts",

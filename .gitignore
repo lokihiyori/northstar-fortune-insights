@@ -16,6 +16,9 @@
 /test-results
 /blob-report
 /playwright/.cache
+# Written by the CI "Verify migration status" step, and by anyone running the
+# same command locally. Uploaded as a failure artifact, never committed.
+/ci-artifacts
 
 # next.js
 /.next/

@@ -39,9 +39,15 @@ licensed professional advice.
 > - **Source ingestion is paste-only, by design.** An admin supplies text; there is no remote URL
 >   fetching, HTML extraction, or scheduled re-ingestion. Fetching remote content raises SSRF and
 >   content-trust questions that deserve their own design.
-> - **CI does not yet run the database-backed suites.** The workflow has no PostgreSQL or Redis
->   service containers, so `pnpm test:integration` and `pnpm test:e2e` currently pass only locally.
->   `pnpm verify` is unaffected — `pnpm test` is unit-only and needs no services.
+> - **The CI workflow has never run remotely.** It now declares PostgreSQL 17 with pgvector and
+>   Redis service containers and runs migrations, seed, the integration suite, and all 53 e2e tests
+>   — every step verified locally against the same images, including from a database built from
+>   scratch. But no GitHub Actions run has executed it, so remote CI is **UNVERIFIED**. See
+>   [`docs/CI.md`](docs/CI.md).
+> - **CI does not serve the production build during e2e.** `next start` refuses to boot without an
+>   https, non-localhost app URL, and production `Secure` cookies cannot be stored over http, so
+>   authenticated tests cannot pass against it. `pnpm build` proves the production build compiles;
+>   serving it under test needs real https, which is deployment work.
 
 ---
 

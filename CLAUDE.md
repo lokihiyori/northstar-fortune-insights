@@ -214,6 +214,27 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - Success logging is off for `/api/v1/health`, `/api/v1/ready`, and the polled generation status
   route. Failures still log everywhere.
 
+## Continuous integration (Phase 8D)
+
+- Two jobs in `.github/workflows/ci.yml`: `quality` (no services) gates `database-e2e` (PostgreSQL 17
+  - pgvector, Redis 7). Full detail in `docs/CI.md`.
+- **CI uses `migrate deploy`, never `migrate dev` or `db push`.** `migrate dev` is interactive and
+  rewrites history; `db push` skips migrations, so CI would stop testing what a deployment runs.
+- `pnpm db:verify` runs after every deploy. `migrate deploy` exiting zero does not prove the
+  `vector` extension exists — and a missing one surfaces later as a confusing retrieval failure.
+- **e2e runs `next dev` in CI too.** `next start` cannot serve it: production validation rejects an
+  http localhost URL, and production `Secure` cookies are not stored over http, so authentication
+  dies. Do not "fix" this by loosening the cookie posture or the env rules.
+- `AUTH_SECRET` is generated per run and `::add-mask::`ed. No repository secret is used anywhere.
+- Stripe, OpenAI, Google, and PostHog stay **unset** so CI exercises the deterministic providers and
+  the degraded billing path. `RATE_LIMIT_TRUSTED_PROXY_HOPS=0`, so CI never demonstrates per-IP
+  limiting — do not claim it does.
+- **Artifacts upload only on failure**: the Playwright HTML report and migration status. Traces are
+  `off` in CI because they capture `Set-Cookie` and storage state. Never add `test-results/`, raw
+  server logs, `.env`, or dumps.
+- `pnpm audit --audit-level high` gates the build. Never lower the level to go green; never auto-fix
+  in CI. Exceptions need a CVE, path, exploitability note, owner, and review date.
+
 ## Current phase
 
 **Phases 0–7 complete and verified against a live database**, with one explicit exception below.
