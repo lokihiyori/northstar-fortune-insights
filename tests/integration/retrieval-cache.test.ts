@@ -114,6 +114,29 @@ beforeAll(async () => {
   if (!url) throw new Error("REDIS_URL is not set. Start the stack with `pnpm db:up`.");
   redis = new Redis(url, { maxRetriesPerRequest: 2 });
 
+  /**
+   * Wait for the *application's* shared client, not just this suite's own.
+   *
+   * The shared client sets `enableOfflineQueue: false`, so a command issued
+   * while it is still connecting is rejected rather than queued. Caching is
+   * fail-open by design, so that rejection is silent — the first query simply
+   * writes nothing, and the "cache is warm" assertion below then fails for a
+   * reason that has nothing to do with invalidation.
+   *
+   * A real server never hits this: `instrumentation.ts` opens the connection at
+   * boot, before the first request. Vitest imports the modules directly, so the
+   * suite has to do it explicitly. The other two integration suites already do.
+   */
+  const { getRedis } = await import("@/lib/redis/client");
+  const client = getRedis();
+  if (client && client.status !== "ready") {
+    await new Promise<void>((resolve) => {
+      client.once("ready", () => {
+        resolve();
+      });
+    });
+  }
+
   const user = await prisma.user.create({
     data: {
       email: `cache-test-${randomUUID()}@northstar.test`,

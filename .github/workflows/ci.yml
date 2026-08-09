@@ -2,7 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `main` plus CI-verification branches. Without the `ci/**` pattern a change
+    # to this workflow could only be proven by opening a pull request or by
+    # merging it to main untested — and the second is how a broken pipeline
+    # lands. The prefix is narrow on purpose: ordinary feature branches still
+    # get their signal from the pull_request trigger, so no branch is built
+    # twice.
+    branches: [main, "ci/**"]
   pull_request:
   workflow_dispatch:
 
