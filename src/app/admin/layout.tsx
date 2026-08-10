@@ -74,7 +74,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         </Container>
       </div>
 
-      <main id="admin-main" className="flex-1 py-8">
+      <main id="admin-main" tabIndex={-1} className="flex-1 py-8 focus-visible:outline-none">
         <Container>{children}</Container>
       </main>
     </div>

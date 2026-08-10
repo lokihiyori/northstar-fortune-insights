@@ -17,12 +17,37 @@
   --ns-text-primary: #102035;
   --ns-text-secondary: #5d6b7e;
   --ns-brand-navy: #123b5d;
-  --ns-brand-teal: #1a8b87;
-  --ns-brand-gold: #d9a441;
-  --ns-success: #2f855a;
-  --ns-warning: #b7791f;
-  --ns-danger: #c2414b;
+  /*
+   * Phase 8F: darkened from #1a8b87, which measured 3.88:1 as text on the
+   * background and 4.13:1 on a surface — both below the AA 4.5:1 floor, and
+   * axe flagged it as a serious violation on four public routes.
+   *
+   * Chosen against the *worst* case rather than the easiest: teal text on a 10%
+   * teal tint of itself (the Badge chip) over the page background, which is
+   * what axe actually failed on after the first correction. That measures
+   * 4.64:1, with 5.31:1 as plain text and 5.64:1 for white on teal — so the
+   * link colour, the badge, and the primary button are all covered at once.
+   */
+  --ns-brand-teal: #167370;
+  /*
+   * Darkened from #d9a441, which measured 2.08:1 in the "Admin" badge — the
+   * worst violation found in this audit. Gold on a light background is the
+   * hardest hue to make readable; this keeps the tone while clearing 4.65:1 on
+   * its own tint. Dark mode is unaffected: #f0c567 there measures 9.73:1.
+   */
+  --ns-brand-gold: #826227;
+  /* Same treatment: each is used as text and as a tinted Badge chip. Measured
+   * against text-on-its-own-10%-tint, which is stricter than text on the bare
+   * background and is what axe actually flagged. */
+  --ns-success: #29754f;
+  --ns-warning: #8d5d18;
+  --ns-danger: #b53d46;
   --ns-border: #dce3e8;
+
+  /* Foreground for anything sitting on --ns-brand-teal. Paired with the teal
+   * so the two can never drift apart: white works on the light teal, and would
+   * fail badly on the light *dark-mode* teal, which is why it is a token. */
+  --ns-on-brand: #ffffff;
 
   /* Derived: the single low-opacity aurora glow permitted on backgrounds. */
   --ns-aurora-from: rgb(26 139 135 / 0.14);
@@ -43,6 +68,13 @@
   --ns-danger: #ff8790;
   --ns-border: #24384d;
 
+  /*
+   * Dark mode inverts the problem: the teal is light, so white on it measured
+   * 1.84:1 — axe flagged it on the app shell. A near-black foreground gives
+   * 10.30:1 against the same teal.
+   */
+  --ns-on-brand: #07111f;
+
   --ns-aurora-from: rgb(83 210 200 / 0.16);
   --ns-aurora-to: rgb(128 185 216 / 0.1);
 }
@@ -55,6 +87,7 @@
   --color-text-secondary: var(--ns-text-secondary);
   --color-brand-navy: var(--ns-brand-navy);
   --color-brand-teal: var(--ns-brand-teal);
+  --color-on-brand: var(--ns-on-brand);
   --color-brand-gold: var(--ns-brand-gold);
   --color-success: var(--ns-success);
   --color-warning: var(--ns-warning);

@@ -122,7 +122,7 @@ export function GenerationProgress({ requestId }: { requestId: string }) {
                 aria-hidden="true"
                 className={cn(
                   "flex size-6 shrink-0 items-center justify-center rounded-full border text-xs",
-                  done && "border-brand-teal bg-brand-teal text-white",
+                  done && "border-brand-teal bg-brand-teal text-on-brand",
                   active && "border-brand-teal text-brand-teal",
                   !done && !active && "border-border text-text-secondary",
                 )}
@@ -134,7 +134,9 @@ export function GenerationProgress({ requestId }: { requestId: string }) {
                   "text-sm",
                   done && "text-text-secondary",
                   active && "font-medium",
-                  !done && !active && "text-text-secondary opacity-60",
+                  // Same reason as the composer step list: `opacity-60` multiplied the
+                  // secondary colour below AA. Pending stages stay readable.
+                  !done && !active && "text-text-secondary",
                 )}
               >
                 {stage}

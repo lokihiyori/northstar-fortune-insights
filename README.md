@@ -9,12 +9,12 @@ assumptions and trade-offs it carries, and what to do next.
 It is decision support, not fortune-telling. It does not predict outcomes and does not replace
 licensed professional advice.
 
-> **Status: Phases 0–8E complete.** Phases 0–7 are verified against a live database; Phase 8 adds
+> **Status: Phases 0–8F complete.** Phases 0–7 are verified against a live database; Phase 8 adds
 > security posture, rate limiting, observability, CI hardening verified by a real GitHub Actions
-> run, and operations runbooks with a verified backup/restore drill. Repository and tooling;
-> the Quiet Aurora design system and full marketing site; authentication and the
-> Build-your-compass onboarding; the app workspace (guided composer, insight report, scenario
-> comparison, action plans, history); the guidance engine — deterministic rules, pgvector
+> run, operations runbooks with a verified backup/restore drill, and a measured accessibility and
+> performance audit. Repository and tooling; the Quiet Aurora design system and full marketing site;
+> authentication and the Build-your-compass onboarding; the app workspace (guided composer, insight
+> report, scenario comparison, action plans, history); the guidance engine — deterministic rules, pgvector
 > retrieval over a reviewed corpus, structured generation behind a provider interface, and
 > citation validation; action plans, feedback and report versioning; local billing, entitlements
 > and analytics; and the admin area with source ingestion, lifecycle, and audit history. See
@@ -28,6 +28,14 @@ licensed professional advice.
 >
 > **No AI provider is required to run it.** Without `OPENAI_API_KEY` a deterministic provider is
 > used, so the full pipeline works offline at zero cost. See [The guidance engine](#the-guidance-engine).
+>
+> **Accessibility and performance are measured, not claimed** (Phase 8F). Lighthouse scores
+> **100/100 accessibility** on `/`, `/pricing`, `/app`, and `/admin`; an automated axe suite of 19
+> tests reports **zero critical or serious violations** in both light and dark themes with no rule
+> suppressed. The client bundle and vector retrieval up to 10,008 passages are both baselined. See
+> [`docs/audits/accessibility.md`](docs/audits/accessibility.md) and
+> [`docs/audits/performance.md`](docs/audits/performance.md). Automated tooling cannot certify WCAG
+> conformance, and every measurement is local — neither is a production claim.
 >
 > **Known limitations**
 >
@@ -501,6 +509,36 @@ DATABASE_URL="…/<target>" pnpm db:verify
 > and the production trusted-proxy hop count remains undecided, so per-IP rate limiting stays inert.
 > Retention, encryption, and off-site storage in the backup document are labelled recommendations,
 > not configuration.
+
+## Audits
+
+| Document                                      | Covers                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Accessibility](docs/audits/accessibility.md) | Lighthouse and axe results, the baseline findings and their fixes, contrast evidence, the keyboard/focus matrix, and what remains unproven |
+| [Performance](docs/audits/performance.md)     | Lighthouse metrics, the client bundle baseline, the vector retrieval benchmark to 10,008 passages, and when to revisit indexing            |
+
+**What Phase 8F proves.** `/`, `/pricing`, `/app`, and `/admin` score **100 accessibility** in
+Lighthouse — the two authenticated routes measured while genuinely signed in, with the final URL
+asserted so a redirect to `/sign-in` or onboarding cannot be mistaken for a pass. An automated axe
+suite (`tests/e2e/accessibility.spec.ts`, 19 tests) reports **zero critical or serious violations**
+across both themes, with **no rule and no selector excluded**. The audit began by finding real
+failures, not by confirming an assumption: seven, including five colour tokens below 4.5:1 in the
+light theme and white-on-teal at 1.84:1 in the dark theme. All were fixed by changing tokens and
+attributes, never by suppressing a rule.
+
+Measurement, not certification:
+
+- **Automated tooling cannot certify WCAG conformance.** axe covers roughly a third to a half of the
+  success criteria. No general WCAG 2.2 AA claim is made for the product.
+- **Everything is local.** One workstation, co-located database and cache, no network latency, no
+  concurrent load. **No production performance or scalability claim is made.**
+- `/app` and `/admin` performance figures come from the **development** server, because production
+  `Secure` cookies cannot be stored over http; they are not comparable to the public routes.
+- No screen-reader, magnification, voice-control, or assistive-technology testing was performed.
+
+```bash
+pnpm exec playwright test tests/e2e/accessibility.spec.ts
+```
 
 ## Troubleshooting: port 5432 already in use
 
