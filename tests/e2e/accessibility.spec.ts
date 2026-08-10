@@ -52,18 +52,54 @@ async function analyze(page: Page, context: string): Promise<void> {
   reportViolations(results.violations as Violation[], context);
 }
 
+/**
+ * Puts the page into one theme and waits until it is *painted* in that theme.
+ *
+ * Two separate things have to settle, and missing the second one is what made
+ * this suite flaky:
+ *
+ * 1. `ThemeProvider` runs next-themes with `defaultTheme="system"`, so
+ *    emulating the media query is what changing an OS preference does — and the
+ *    controller reacts asynchronously. Hand-mutating `.dark` as well raced it.
+ * 2. Buttons carry `transition-[background-color,color,filter,border-color]
+ *    duration-150`, so the class flips instantly but the colour does not. axe
+ *    reads *painted* colour, so a scan started here measured a half-finished
+ *    interpolation: a probe caught `#ebeced` on `#1b7b77` — neither theme's
+ *    value — reported as a serious `color-contrast` failure at 4.28:1, on
+ *    whichever route happened to be scanned mid-transition.
+ *
+ * Both waits are real conditions, not delays. Only transitions are awaited:
+ * the skeleton's `animate-pulse` never ends, and a keyframe animation is not
+ * what corrupts a contrast reading.
+ */
+const DARK_CLASS = /(^|\s)dark(\s|$)/;
+
+async function applyTheme(page: Page, scheme: "light" | "dark"): Promise<void> {
+  await page.emulateMedia({ colorScheme: scheme });
+
+  const html = page.locator("html");
+  if (scheme === "dark") {
+    await expect(html).toHaveClass(DARK_CLASS);
+  } else {
+    await expect(html).not.toHaveClass(DARK_CLASS);
+  }
+
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        (animation) =>
+          animation.constructor.name !== "CSSTransition" || animation.playState !== "running",
+      ),
+  );
+}
+
 /** Both themes, because contrast and focus differ between them. */
 async function analyzeBothThemes(page: Page, context: string): Promise<void> {
-  await page.emulateMedia({ colorScheme: "light" });
-  await page.evaluate(() => {
-    document.documentElement.classList.remove("dark");
-  });
+  await applyTheme(page, "light");
   await analyze(page, `${context} [light]`);
 
-  await page.emulateMedia({ colorScheme: "dark" });
-  await page.evaluate(() => {
-    document.documentElement.classList.add("dark");
-  });
+  await applyTheme(page, "dark");
   await analyze(page, `${context} [dark]`);
 }
 
@@ -386,6 +422,12 @@ test.describe("authenticated", () => {
     await analyzeBothThemes(page, "axe /admin");
 
     await page.goto("/admin/sources");
+    // The only scan in this file that sampled a page with nothing asserted
+    // first, and the only one that went flaky in CI — axe reported a serious
+    // contrast violation on one attempt and none on the retry. This `h1` sits
+    // outside the populated/empty branch, so it proves the intended page has
+    // finished rendering whether or not the corpus has rows.
+    await expect(page.getByRole("heading", { level: 1, name: "Sources" })).toBeVisible();
     await analyzeBothThemes(page, "axe /admin/sources");
 
     await page.goto("/admin/sources/new");
