@@ -297,15 +297,36 @@ test.describe("authenticated", () => {
 
   test("sidebar navigation is keyboard operable", async ({ page }) => {
     await signUp(page, uniqueEmail("a11y-nav"));
+
+    /*
+     * The sidebar lives in the app layout, so this exercises it in the state
+     * this test's own setup produces: signed in, onboarding not yet finished.
+     *
+     * `/app` redirects such an account to the wizard, and that redirect lands
+     * *after* `goto` resolves — a probe saw `page.url()` report `/app` on every
+     * run while the frame then navigated to `/app/onboarding` on 19 of 20, and
+     * the sidebar link the test had focused was detached on 7 of 20. Focusing
+     * before the route settles is the whole defect. Waiting for the settled URL
+     * and a marker unique to it removes it.
+     */
     await page.goto("/app");
+    await page.waitForURL(/\/app\/onboarding/);
+    await expect(page).toHaveURL(/\/app\/onboarding/);
+    await expect(page.getByRole("heading", { level: 1, name: "Where are you now?" })).toBeVisible();
 
     const nav = page.getByRole("navigation", { name: "Application" });
     const history = nav.getByRole("link", { name: "History" });
+    await expect(nav).toBeVisible();
+    await expect(history).toBeVisible();
+    await expect(history).toBeEnabled();
 
     await history.focus();
     await expect(history).toBeFocused();
     await page.keyboard.press("Enter");
+
     await page.waitForURL(/\/app\/history/);
+    await expect(page).toHaveURL(/\/app\/history/);
+    await expect(page.getByRole("heading", { level: 1, name: "Your history" })).toBeVisible();
 
     // Focus must land somewhere in the document after client navigation, not
     // be lost to the body with no indication of position.
