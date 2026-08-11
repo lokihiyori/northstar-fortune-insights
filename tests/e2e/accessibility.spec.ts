@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { SEEDED_USER, TEST_PASSWORD, promoteToAdmin, uniqueEmail } from "./helpers/db";
+import { resetDemoForTests } from "./helpers/demo";
 
 /**
  * Accessibility, audited against the running application (Phase 8F).
@@ -466,6 +467,13 @@ test.describe("demo mode", () => {
     process.env["DEMO_MODE_ENABLED"] !== "true",
     "demo mode is not enabled in this environment",
   );
+
+  // The demo account has to exist before it can be signed into, and this spec
+  // may run before `demo.spec.ts` creates it. Same helper, same operator
+  // command — not a second way of building the account.
+  test.beforeAll(async () => {
+    await resetDemoForTests();
+  });
 
   test("the demo entry point and banner pass in both themes", async ({ page }) => {
     await page.goto("/sign-in");
