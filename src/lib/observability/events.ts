@@ -28,6 +28,11 @@ export const LOG_EVENTS = [
   "auth.sign_in_refused",
   "auth.sign_up_refused",
 
+  // --- demo mode -----------------------------------------------------------
+  // Category only, same rule as above: why the shared demo login was refused,
+  // never the address or the configured password.
+  "demo.sign_in_refused",
+
   // --- rate limiting -------------------------------------------------------
   "ratelimit.refused",
   "ratelimit.backend_unavailable",

@@ -1,4 +1,5 @@
 import { requireApiUser } from "@/features/auth/guards";
+import { assertNotDemo } from "@/features/demo/session";
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { getStripe, isBillingConfigured } from "@/features/billing/stripe";
 import { getSubscription } from "@/features/billing/subscription";
@@ -15,6 +16,11 @@ export const POST = withApiLogging("/api/v1/billing/portal", async () => {
   const auth = await requireApiUser();
   if (!auth.ok) return auth.response;
   setContextActor(auth.user.id);
+
+  // Same rule as Checkout, and checked against the database for the same
+  // reason: this denies an action, so a token claim is not evidence.
+  const notDemo = await assertNotDemo(auth.user.id, "Billing");
+  if (!notDemo.ok) return notDemo.response;
 
   const stripe = getStripe();
   if (!stripe || !isBillingConfigured()) {

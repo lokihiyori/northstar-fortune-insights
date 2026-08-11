@@ -3,6 +3,7 @@ import { BillingActionButton } from "@/components/billing/upgrade-button";
 import { Badge } from "@/components/ui/badge";
 import { UsageMeter } from "@/components/ui/usage-meter";
 import { requireUser } from "@/features/auth/guards";
+import { isDemoSession } from "@/features/demo/session";
 import { getEntitlements } from "@/features/billing/entitlements";
 import { isBillingConfigured } from "@/features/billing/stripe";
 import { getSubscription } from "@/features/billing/subscription";
@@ -26,6 +27,7 @@ export default async function BillingPage({
   ]);
 
   const configured = isBillingConfigured();
+  const isDemo = isDemoSession(user);
   const isPlus = entitlements.plan === "plus";
   const checkout = params["checkout"];
 
@@ -107,7 +109,19 @@ export default async function BillingPage({
           </dl>
 
           <div className="mt-6">
-            {!configured ? (
+            {isDemo ? (
+              /*
+               * The demo account never sees an upgrade button. Checkout and the
+               * Customer Portal both refuse it server-side, so rendering one
+               * would be a control that fails after the click — and a shared
+               * recruiter login has no business opening a real payment flow.
+               */
+              <p className="text-text-secondary text-sm">
+                Billing is unavailable in the demo workspace. The demo account stays on the Free
+                plan, which includes enough capacity for a full guidance journey. No payment method
+                is collected and no subscription is created.
+              </p>
+            ) : !configured ? (
               // Honest about the deployment rather than showing a button that
               // cannot work.
               <p className="text-text-secondary text-sm">

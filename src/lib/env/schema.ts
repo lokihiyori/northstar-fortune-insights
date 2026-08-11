@@ -71,6 +71,26 @@ export const serverEnvSchema = z.object({
     .string()
     .regex(/^\d+$/, "must be a whole number of proxy hops")
     .optional(),
+
+  /**
+   * Recruiter demo mode (Phase 8G). Off unless `DEMO_MODE_ENABLED` is exactly
+   * `"true"`, and server-side only — there is deliberately no `NEXT_PUBLIC_`
+   * counterpart, because a client-visible flag would be an authorization input
+   * the browser controls.
+   *
+   * The email is the demo identity: it is unique, normalized at both auth
+   * entry points, and immutable (nothing in `src` updates `users.email`), so it
+   * needs no schema column to be stable.
+   */
+  DEMO_MODE_ENABLED: z.string().optional(),
+  DEMO_ACCOUNT_EMAIL: z.string().optional(),
+  DEMO_ACCOUNT_PASSWORD: z.string().optional(),
+
+  /**
+   * Explicit acknowledgement required before demo mode may run with
+   * `NODE_ENV=production`. Deliberately unset in this phase.
+   */
+  DEMO_ALLOW_IN_PRODUCTION: z.string().optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -86,6 +106,13 @@ const PROVIDER_GROUPS = [
   },
   { name: "Google sign-in", keys: ["AUTH_GOOGLE_ID", "AUTH_GOOGLE_SECRET"] },
 ] as const;
+
+/**
+ * A single ordinary address. Deliberately stricter than `z.string().email()`:
+ * it also rejects SQL/glob wildcards and unexpanded `${VAR}` / `%VAR%` markers,
+ * because this value selects the row that `pnpm demo:reset` deletes.
+ */
+export const DEMO_EMAIL_PATTERN = /^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 export type ValidationContext = {
   /**
@@ -114,8 +141,58 @@ function applyContextRules(env: ServerEnv, ctx: z.RefinementCtx, context: Valida
     }
   }
 
+  /*
+   * Demo mode (Phase 8G) is all-or-nothing in every environment: an enabled
+   * flag with no account is a half-configured feature that would render a
+   * sign-in button leading nowhere, and an account with the flag off is
+   * harmless but worth naming.
+   */
+  if (env.DEMO_MODE_ENABLED === "true") {
+    const email = env.DEMO_ACCOUNT_EMAIL?.trim() ?? "";
+    const password = env.DEMO_ACCOUNT_PASSWORD ?? "";
+
+    if (email.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DEMO_ACCOUNT_EMAIL"],
+        message: "is required when DEMO_MODE_ENABLED is true.",
+      });
+    } else if (!DEMO_EMAIL_PATTERN.test(email)) {
+      // Names the rule, never the value.
+      ctx.addIssue({
+        code: "custom",
+        path: ["DEMO_ACCOUNT_EMAIL"],
+        message:
+          "must be a single ordinary email address — no whitespace, wildcards, or unexpanded template markers.",
+      });
+    }
+
+    if (password.length < 12) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DEMO_ACCOUNT_PASSWORD"],
+        message: "is required when DEMO_MODE_ENABLED is true and must be at least 12 characters.",
+      });
+    }
+  }
+
   const isProductionRuntime = env.NODE_ENV === "production" && !context.isBuildPhase;
   if (!isProductionRuntime) return;
+
+  /*
+   * A public demo account in production is a deliberate decision, not a
+   * default. It is shared, its password lives in configuration, and it is
+   * resettable by an operator — all reasonable for a recruiter demo and none of
+   * it reasonable by accident.
+   */
+  if (env.DEMO_MODE_ENABLED === "true" && env.DEMO_ALLOW_IN_PRODUCTION !== "true") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DEMO_ALLOW_IN_PRODUCTION"],
+      message:
+        'must be "true" to run demo mode in production. The demo account is shared and resettable; enabling it in production is an explicit decision.',
+    });
+  }
 
   // --- (b) Production runtime requirements ---------------------------------
   const authSecret = secret(32).safeParse(env.AUTH_SECRET ?? "");

@@ -1,4 +1,5 @@
 import { requireApiUser } from "@/features/auth/guards";
+import { assertNotDemo } from "@/features/demo/session";
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { getStripe, isBillingConfigured, plusPriceId } from "@/features/billing/stripe";
 import { getSubscription, linkStripeCustomer } from "@/features/billing/subscription";
@@ -22,6 +23,12 @@ export const POST = withApiLogging("/api/v1/billing/checkout", async () => {
   const auth = await requireApiUser();
   if (!auth.ok) return auth.response;
   setContextActor(auth.user.id);
+
+  // Database-backed, not session-derived: this denies an action, so the token
+  // is not good enough. The demo account must never reach Stripe — a shared
+  // recruiter login should not be able to open a real Checkout session.
+  const notDemo = await assertNotDemo(auth.user.id, "Billing");
+  if (!notDemo.ok) return notDemo.response;
 
   const stripe = getStripe();
   const priceId = plusPriceId();

@@ -284,12 +284,51 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - Every number is local. **Never claim WCAG certification, production performance, or production
   scalability from these audits.**
 
+## Recruiter demo mode (Phase 8G)
+
+- **Demo status is server-derived and never client-supplied.** There is no `NEXT_PUBLIC_` demo flag
+  and no demo claim in the token. `features/demo/config.ts` compares the authenticated, normalized
+  email against `DEMO_ACCOUNT_EMAIL`. Adding a client-visible flag would make the browser an
+  authorization input.
+- **No `User.isDemo` column, and no migration.** The email is `@unique`, normalized at both auth
+  entry points, and immutable — nothing in `src` updates `users.email`. That is what makes a
+  reserved identity sufficient. If email ever becomes mutable, this design has to be revisited
+  before anything else.
+- **Two checks, two purposes.** `isDemoSession` reads the session and is for _labelling_.
+  `assertNotDemo` re-reads the row from the database and is for _denying_ — same rule the project
+  applies to roles: the token is a hint, the database is the authority.
+- The demo address is **reserved against sign-up even when the flag is off**, so enabling demo mode
+  later cannot collide with an account a stranger registered. The refusal is worded identically to
+  an already-registered address, so it is not an enumeration oracle.
+- **The password is server-side only.** Never rendered, logged, returned, or put in analytics. The
+  sign-in Server Action supplies it; no endpoint returns credentials or creates arbitrary users.
+- Demo denials are **server-side**: admin pages and APIs, Stripe Checkout, and the Customer Portal
+  all refuse the demo account. The billing page states the position rather than rendering an upgrade
+  button that would fail after the click.
+- **`pnpm demo:reset` is an operator CLI, never an HTTP endpoint** — a reset route on a shared
+  account is a denial-of-service handle. It refuses on: flag off, empty/wildcard/unexpanded address,
+  the seeded dev or admin accounts, a short password, production without
+  `DEMO_ALLOW_IN_PRODUCTION`, a non-`USER` role, multiple matches, or existing audit history.
+- The reset deletes **one user row by id** inside a transaction and lets the schema cascades do the
+  rest; demo-owned analytics events go first because that relation is `SetNull`. It never touches
+  another user, a source, a passage, the retrieval cache, the generation counter, or per-IP buckets.
+  Redis cleanup removes only keys it can **compute** — no scan, no pattern, no `FLUSHDB`.
+- `AuditLog` stays append-only: `actorId` is `SetNull` by design, and the reset refuses outright if
+  the demo account authored any entry rather than deleting history.
+- **Onboarding is complete in the reset snapshot**, so the two-minute journey starts at Ask. The
+  wizard stays reachable for anyone who asks to see it.
+- Reset isolation is proved by `tests/integration/demo-reset.test.ts` against real PostgreSQL and
+  Redis: a control user's cross-table fingerprint and a shared-corpus fingerprint must be identical
+  before and after every reset. **The isolation claim must never rest on UI hiding.**
+- Demo mode is **off by default** and unconfigured for production. Do not describe it as deployed.
+
 ## Current phase
 
-**Phases 0–8F complete.** Phases 0–7 are verified against a live database, with one explicit
+**Phases 0–8G complete.** Phases 0–7 are verified against a live database, with one explicit
 exception below. Phase 8 adds: 8A security posture, 8B rate limiting, 8C observability, 8D CI
 hardening verified by a real GitHub Actions run, 8E operations runbooks with a verified
-`pg_dump`/`pg_restore` drill, and 8F a measured accessibility and performance audit.
+`pg_dump`/`pg_restore` drill, 8F a measured accessibility and performance audit, and 8G an
+isolated, resettable recruiter demo mode.
 
 Repository and tooling; design system and marketing site; authentication and onboarding; the app
 workspace; the guidance engine; action plans, feedback and report versioning; local billing,
@@ -306,4 +345,4 @@ PostgreSQL — no mocks.
 against Stripe because no test-mode credentials are configured. The code exists and degrades
 cleanly without keys; do not describe it as verified until `stripe listen` has exercised it.
 
-Next: Phase 8G. Do not begin it without approval.
+Next: no phase is scheduled. Do not begin one without approval.
