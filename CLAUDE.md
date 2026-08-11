@@ -258,12 +258,38 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
 - Prefer application rollback. Database restoration is only for when information was destroyed.
 - `prisma migrate resolve` edits the ledger, never the schema. Only after inspecting the database.
 
+## Accessibility and performance (Phase 8F)
+
+- Findings and evidence live in `docs/audits/accessibility.md` and `docs/audits/performance.md`.
+  Update them when a token, a focus behaviour, or a retrieval characteristic changes.
+- **`tests/e2e/accessibility.spec.ts` is the regression gate.** Zero critical or serious axe
+  violations, both themes, on every audited route. **Never disable a rule or add a selector
+  exclusion to go green** — the failure is the finding. `withTags` covers `wcag2a`, `wcag2aa`,
+  `wcag21a`, `wcag21aa`.
+- **Colour lives in tokens, not components.** Contrast was fixed once in `src/app/globals.css`; a
+  literal hex or a `text-white` in a component would escape that. Use `text-on-brand` on branded
+  surfaces — the dark theme's teal is light, so white on it measures 1.84:1.
+- **Never dim text with `opacity` to signal an inactive state.** It multiplies contrast against the
+  background and was two of the seven baseline findings. Use a distinct token, a dashed border, or a
+  different weight.
+- Skip links only work if the target can receive focus: each layout's `<main>` carries
+  `tabIndex={-1}` with `focus-visible:outline-none`. Do not remove either half.
+- **A Lighthouse run that redirected is not a measurement.** The authenticated routes must assert the
+  final URL — `/app` silently became `/app/onboarding` on the first run. Never weaken the cookie
+  posture to make an audit authenticate (ADR 0007).
+- Retrieval is exact cosine scan with **no ANN index, by design** (ADR 0003). Benchmarked to 10,008
+  passages: cold ~51 ms, warm ~0.9 ms. The thresholds that would justify revisiting indexing are in
+  the performance document — measure against them rather than reacting to a feeling.
+- Benchmarks run on a guarded disposable database and **generated benchmark data is never committed**.
+- Every number is local. **Never claim WCAG certification, production performance, or production
+  scalability from these audits.**
+
 ## Current phase
 
-**Phases 0–8E complete.** Phases 0–7 are verified against a live database, with one explicit
+**Phases 0–8F complete.** Phases 0–7 are verified against a live database, with one explicit
 exception below. Phase 8 adds: 8A security posture, 8B rate limiting, 8C observability, 8D CI
-hardening verified by a real GitHub Actions run, and 8E operations runbooks with a verified
-`pg_dump`/`pg_restore` drill.
+hardening verified by a real GitHub Actions run, 8E operations runbooks with a verified
+`pg_dump`/`pg_restore` drill, and 8F a measured accessibility and performance audit.
 
 Repository and tooling; design system and marketing site; authentication and onboarding; the app
 workspace; the guidance engine; action plans, feedback and report versioning; local billing,
@@ -280,4 +306,4 @@ PostgreSQL — no mocks.
 against Stripe because no test-mode credentials are configured. The code exists and degrades
 cleanly without keys; do not describe it as verified until `stripe listen` has exercised it.
 
-Next: Phase 8 (hardening and deployment). Do not begin it without approval.
+Next: Phase 8G. Do not begin it without approval.

@@ -42,7 +42,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
       <div className="flex flex-1">
         <AppSidebar />
-        <main id="main" className="min-w-0 flex-1 px-5 py-8 sm:px-8">
+        <main
+          id="main"
+          tabIndex={-1}
+          className="min-w-0 flex-1 px-5 py-8 focus-visible:outline-none sm:px-8"
+        >
           {children}
         </main>
       </div>

@@ -12,7 +12,7 @@ export default function MarketingLayout({ children }: { children: ReactNode }) {
         Skip to content
       </a>
       <MarketingHeader />
-      <main id="main" className="flex-1">
+      <main id="main" tabIndex={-1} className="flex-1 focus-visible:outline-none">
         {children}
       </main>
       <MarketingFooter />

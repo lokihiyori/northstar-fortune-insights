@@ -135,7 +135,11 @@ export function QuestionComposer({
                   "rounded-full border px-3 py-1 text-xs",
                   state === "current" && "border-brand-teal bg-brand-teal/10 text-text-primary",
                   state === "done" && "border-border text-text-secondary",
-                  state === "upcoming" && "border-border text-text-secondary opacity-60",
+                  // A dashed border rather than `opacity-60`, which multiplied
+                  // the secondary text down to roughly 3:1 and was the one
+                  // remaining serious axe violation. The step is still visibly
+                  // "not yet reached" without dimming the label below AA.
+                  state === "upcoming" && "border-border text-text-secondary border-dashed",
                 )}
               >
                 {n}. {title}

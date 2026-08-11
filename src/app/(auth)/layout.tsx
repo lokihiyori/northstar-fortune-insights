@@ -13,7 +13,11 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
         </Container>
       </header>
 
-      <main id="main" className="aurora-glow flex flex-1 items-center py-12">
+      <main
+        id="main"
+        tabIndex={-1}
+        className="aurora-glow flex flex-1 items-center py-12 focus-visible:outline-none"
+      >
         <Container className="max-w-md">{children}</Container>
       </main>
     </div>

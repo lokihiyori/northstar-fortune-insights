@@ -7,7 +7,9 @@ type Size = "sm" | "md" | "lg";
 
 const VARIANTS: Record<Variant, string> = {
   // Spec section 2: the main CTA is teal, never gold.
-  primary: "bg-brand-teal text-white hover:brightness-110 active:brightness-95",
+  // `text-on-brand`, not `text-white`: the dark theme's teal is light, so white
+  // on it measured 1.84:1. The paired token follows the teal into both themes.
+  primary: "bg-brand-teal text-on-brand hover:brightness-110 active:brightness-95",
   secondary:
     "border border-border bg-surface text-text-primary hover:bg-surface-raised active:bg-surface-raised",
   ghost: "text-text-secondary hover:bg-surface-raised hover:text-text-primary",
