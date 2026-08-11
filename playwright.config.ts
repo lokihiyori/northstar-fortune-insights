@@ -1,9 +1,30 @@
+import { randomBytes } from "node:crypto";
 import { defineConfig, devices } from "@playwright/test";
 
 const PORT = Number(process.env["PLAYWRIGHT_PORT"] ?? 3000);
 // `localhost` rather than `127.0.0.1`: the Next dev server treats them as
 // different origins and blocks its own dev resources across the mismatch.
 const baseURL = process.env["PLAYWRIGHT_BASE_URL"] ?? `http://localhost:${PORT}`;
+
+/*
+ * Demo mode configuration for the suite, so the demo specs are hermetic.
+ *
+ * Demo status is a *server* setting read from the environment, and the server
+ * here is a child of this process — so the values have to exist here, before
+ * anything is spawned. CI carries no `.env`, which is why these defaults exist
+ * at all: without them the demo specs would have to be skipped, and a skipped
+ * test proves nothing.
+ *
+ * `??=` so a developer's own `.env` still wins locally. The default address is
+ * on the `@northstar.test` domain the suite already reserves, so the existing
+ * teardown removes the account when the run ends. The password is random per
+ * run and never committed.
+ *
+ * `tests/e2e-demo-disabled` deliberately strips all of this back out again.
+ */
+process.env["DEMO_MODE_ENABLED"] ??= "true";
+process.env["DEMO_ACCOUNT_EMAIL"] ??= "demo-e2e@northstar.test";
+process.env["DEMO_ACCOUNT_PASSWORD"] ??= randomBytes(24).toString("hex");
 
 export default defineConfig({
   testDir: "./tests/e2e",
