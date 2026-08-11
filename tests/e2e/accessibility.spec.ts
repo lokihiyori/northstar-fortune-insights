@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { SEEDED_USER, TEST_PASSWORD, promoteToAdmin, uniqueEmail } from "./helpers/db";
+import { resetDemoForTests } from "./helpers/demo";
 
 /**
  * Accessibility, audited against the running application (Phase 8F).
@@ -454,5 +455,47 @@ test.describe("authenticated", () => {
     await page.goto("/admin/sources/new");
     await expect(page.getByLabel("Title")).toBeVisible();
     await analyzeBothThemes(page, "axe /admin/sources/new");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Demo mode (Phase 8G) — new UI, so it goes through the same gate
+// ---------------------------------------------------------------------------
+
+test.describe("demo mode", () => {
+  test.skip(
+    process.env["DEMO_MODE_ENABLED"] !== "true",
+    "demo mode is not enabled in this environment",
+  );
+
+  // The demo account has to exist before it can be signed into, and this spec
+  // may run before `demo.spec.ts` creates it. Same helper, same operator
+  // command — not a second way of building the account.
+  test.beforeAll(async () => {
+    await resetDemoForTests();
+  });
+
+  test("the demo entry point and banner pass in both themes", async ({ page }) => {
+    await page.goto("/sign-in");
+    const enter = page.getByRole("button", { name: "Explore the demo" });
+    await expect(enter).toBeVisible();
+
+    // The entry point must have a real accessible name, not an icon alone.
+    await expect(enter).toHaveAccessibleName(/explore the demo/i);
+    await analyzeBothThemes(page, "axe /sign-in with demo entry");
+
+    // Keyboard-operable, like every other control on the page.
+    await enter.focus();
+    await expect(enter).toBeFocused();
+    await enter.press("Enter");
+    await page.waitForURL(/\/app/);
+
+    const banner = page.getByRole("note", { name: "Demo workspace notice" });
+    await expect(banner).toBeVisible();
+
+    // The state is carried by text, not by colour alone (WCAG 1.4.1).
+    await expect(banner).toContainText(/Demo workspace/i);
+
+    await analyzeBothThemes(page, "axe /app with demo banner");
   });
 });

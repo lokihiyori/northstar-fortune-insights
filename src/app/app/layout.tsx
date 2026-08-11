@@ -1,10 +1,12 @@
 import type { ReactNode } from "react";
 import { AppSidebar, MobileBottomNav } from "@/components/navigation/app-sidebar";
+import { DemoBadge, DemoBanner } from "@/components/demo/demo-banner";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Logo } from "@/components/ui/logo";
 import { Button } from "@/components/ui/button";
 import { signOutAction } from "@/features/auth/actions";
 import { requireUser } from "@/features/auth/guards";
+import { isDemoSession } from "@/features/demo/session";
 
 /**
  * The guard runs here rather than only in middleware. Middleware can be
@@ -13,6 +15,8 @@ import { requireUser } from "@/features/auth/guards";
  */
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const user = await requireUser("/app");
+  // Server-derived. There is no client flag and no demo claim in the token.
+  const isDemo = isDemoSession(user);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -27,6 +31,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         <div className="flex h-16 items-center justify-between gap-4 px-5 sm:px-8">
           <Logo href="/app" />
           <div className="flex items-center gap-3">
+            {isDemo ? <DemoBadge /> : null}
             <span className="text-text-secondary hidden text-sm sm:inline">
               {user.name ?? user.email}
             </span>
@@ -39,6 +44,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
+
+      {isDemo ? <DemoBanner /> : null}
 
       <div className="flex flex-1">
         <AppSidebar />

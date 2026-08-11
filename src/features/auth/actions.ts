@@ -5,6 +5,7 @@ import { AuthError } from "next-auth";
 import { signIn, signOut } from "@/auth";
 import { hashPassword } from "@/features/auth/password";
 import { signInSchema, signUpSchema } from "@/features/auth/validation";
+import { isReservedDemoEmail } from "@/features/demo/config";
 import { prisma } from "@/lib/db/prisma";
 import { fieldErrorsFrom } from "@/lib/api/response";
 import {
@@ -98,6 +99,24 @@ async function performRegister(
     // a log that answers that question is an enumeration oracle in a file.
     logger.warn("auth.sign_up_refused", { reason: "rate_limited" });
     return { status: "error", message: limited.message, values };
+  }
+
+  /*
+   * The demo address is reserved even when demo mode is switched off, so that
+   * turning it on later cannot collide with an account a stranger registered in
+   * the meantime — which would point `pnpm demo:reset` at a real person's row.
+   *
+   * The refusal is the same one an already-registered address gets, so this
+   * does not become an oracle for which address is the demo account.
+   */
+  if (isReservedDemoEmail(parsed.data.email)) {
+    return {
+      status: "error",
+      fieldErrors: {
+        email: ["An account with this email already exists. Try signing in instead."],
+      },
+      values,
+    };
   }
 
   const existing = await prisma.user.findUnique({

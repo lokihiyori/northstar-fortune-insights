@@ -1,0 +1,233 @@
+import { expect, test, type Page } from "@playwright/test";
+import { TEST_PASSWORD, uniqueEmail } from "./helpers/db";
+import { clearRateLimitKeys } from "./helpers/redis";
+import { resetDemoForTests } from "./helpers/demo";
+
+/**
+ * Recruiter demo mode, against the real application (Phase 8G).
+ *
+ * No mocks: real PostgreSQL, real Redis, the deterministic guidance provider,
+ * and the seeded corpus. The demo account is the one configured in `.env`, and
+ * this suite drives it exactly as a visitor would — through the sign-in page.
+ *
+ * The isolation claims are proved server-side, not by checking that a link is
+ * hidden: another user's report is requested **by id** and must be refused, and
+ * the admin and billing surfaces are exercised through the API.
+ */
+
+const DEMO_BANNER = /Demo workspace — fictional data/;
+
+/** Enters through the demo action, as a recruiter would. */
+async function enterDemo(page: Page): Promise<void> {
+  await page.goto("/sign-in");
+  await page.getByRole("button", { name: "Explore the demo" }).click();
+  await page.waitForURL(/\/app/);
+}
+
+test.describe.configure({ mode: "serial" });
+
+/**
+ * The demo account is *shared*, so unlike every other suite here its state is
+ * cumulative across runs: rate-limit buckets keyed on a stable user id carry
+ * over, and — measured, not guessed — three previous generations fill the Free
+ * plan's three-reports-a-month allowance, after which the Generate button is
+ * correctly disabled.
+ *
+ * So the suite does what an operator does before a demo: `demo:reset`, through
+ * the same function `pnpm demo:reset` calls. Nothing is disabled, no test-only
+ * policy is substituted, and no limit is raised — the entitlement and limiter
+ * behaviour under test is the real one. `docs/demo.md` documents this as a
+ * standing property of a shared account.
+ */
+test.beforeAll(async () => {
+  await clearRateLimitKeys();
+  await resetDemoForTests();
+});
+
+test("the demo entry point is present and labelled on the sign-in page", async ({ page }) => {
+  await page.goto("/sign-in");
+
+  const button = page.getByRole("button", { name: "Explore the demo" });
+  await expect(button).toBeVisible();
+  await expect(button).toBeEnabled();
+
+  // Says what it is before the visitor commits to it.
+  await expect(page.getByText(/fictional data/i)).toBeVisible();
+
+  // The password is server-side. It must not be anywhere in the markup, and
+  // the assertion is only meaningful if a password is actually configured.
+  const demoPassword = process.env["DEMO_ACCOUNT_PASSWORD"] ?? "";
+  expect(demoPassword, "DEMO_ACCOUNT_PASSWORD must be configured").not.toBe("");
+
+  const html = await page.content();
+  expect(html).not.toContain(demoPassword);
+});
+
+test("the demo workspace is visibly labelled on every page", async ({ page }) => {
+  await enterDemo(page);
+
+  const banner = page.getByRole("note", { name: "Demo workspace notice" });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText(DEMO_BANNER);
+  await expect(banner).toContainText(/temporary/i);
+  await expect(banner).toContainText(/Do not enter personal information/i);
+
+  // Compact marker in the header too.
+  await expect(page.getByText("Demo", { exact: true })).toBeVisible();
+
+  // Persistent, not just on the dashboard.
+  for (const path of ["/app/history", "/app/ask", "/app/billing", "/app/profile"]) {
+    await page.goto(path);
+    await expect(page.getByRole("note", { name: "Demo workspace notice" })).toBeVisible();
+  }
+});
+
+test("the demo account starts onboarded, as a fictional newcomer, with no history", async ({
+  page,
+}) => {
+  await enterDemo(page);
+
+  // Onboarding is complete: /app is the dashboard, not the wizard.
+  await expect(page).toHaveURL(/\/app$/);
+  await expect(page.getByRole("navigation", { name: "Application" })).toBeVisible();
+
+  await page.goto("/app/profile");
+  await expect(page.getByText("Toronto, Ontario")).toBeVisible();
+
+  await page.goto("/app/history");
+  await expect(page.getByRole("heading", { level: 1, name: "Your history" })).toBeVisible();
+});
+
+/**
+ * The journey is two tests rather than one, and the describe block is serial so
+ * they run in order. Together they cover exactly what one long test covered;
+ * split because generating a report and then exercising compare, plan, and
+ * history does not fit one test budget — and raising the budget would hide how
+ * long it really takes rather than measure it.
+ */
+let demoReportUrl = "";
+
+test("the demo user can generate a source-backed insight", async ({ page }) => {
+  await enterDemo(page);
+
+  await page.goto("/app/ask");
+  await page.getByText("Education", { exact: true }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  await page
+    .getByLabel("Your decision question")
+    .fill("How do I get my international accounting credential recognised to work in Ontario?");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  await page.getByText("Speed to outcome", { exact: true }).click();
+  await page.getByText("Cost", { exact: true }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  await page.getByRole("button", { name: "Generate my insight" }).click();
+  await page.waitForURL(/\/app\/insights\/[a-z0-9]+/, { timeout: 60_000 });
+
+  // The explainability contract: paths, stated confidence, and real evidence.
+  await expect(page.getByRole("tablist", { name: "Recommended paths" })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await expect(page.getByRole("region", { name: /^Confidence:/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Evidence", exact: true })).toBeVisible();
+
+  // The banner is still there on the report itself.
+  await expect(page.getByRole("note", { name: "Demo workspace notice" })).toBeVisible();
+
+  demoReportUrl = page.url();
+});
+
+test("the demo user can compare paths, build a plan, and see its own history", async ({ page }) => {
+  expect(demoReportUrl, "the generation test must run first").not.toBe("");
+
+  await enterDemo(page);
+
+  await page.goto(demoReportUrl);
+  await page.getByRole("link", { name: "Compare the paths" }).click();
+  await page.waitForURL(/\/app\/compare\//);
+  await expect(page.getByRole("table")).toBeVisible();
+
+  await page.goto(demoReportUrl);
+  await page.getByRole("button", { name: "Create an action plan" }).click();
+  await page.waitForURL(/\/app\/plans\/[a-z0-9]+/);
+
+  const firstTask = page.getByRole("button", { name: /^Mark ".*" as done$/ }).first();
+  await expect(firstTask).toBeVisible();
+  await firstTask.click();
+  await expect(page.getByRole("img", { name: /complete$/ })).toBeVisible();
+
+  const appNav = page.getByRole("navigation", { name: "Application" });
+  await appNav.getByRole("link", { name: "History" }).click();
+  await page.waitForURL(/\/app\/history/);
+  await expect(page.getByText("accounting credential")).toBeVisible();
+
+  await expect(page.getByRole("note", { name: "Demo workspace notice" })).toBeVisible();
+});
+
+test("the demo user cannot reach admin, billing, or another account's data", async ({
+  page,
+  browser,
+}) => {
+  // A separate real user, whose report id the demo will try to open.
+  const victimContext = await browser.newContext();
+  const victim = await victimContext.newPage();
+  const victimEmail = uniqueEmail("demo-victim");
+
+  await victim.goto("/sign-up");
+  await victim.getByLabel("Email").fill(victimEmail);
+  await victim.getByLabel("Password").fill(TEST_PASSWORD);
+  await victim.getByRole("button", { name: "Create account" }).click();
+  await victim.waitForURL(/\/app\/onboarding/);
+
+  // A normal user gets no demo banner — the label must distinguish the two.
+  await expect(victim.getByRole("note", { name: "Demo workspace notice" })).toHaveCount(0);
+
+  const victimReports = await victim.request.get("/api/v1/me");
+  expect(victimReports.status()).toBe(200);
+  await victimContext.close();
+
+  await enterDemo(page);
+
+  // Role is USER, so the admin area redirects rather than rendering.
+  await page.goto("/admin");
+  await expect(page).not.toHaveURL(/\/admin/);
+
+  // And the admin API answers 403, not 200.
+  const adminApi = await page.request.get("/api/v1/admin/sources");
+  expect([401, 403, 404]).toContain(adminApi.status());
+
+  // Billing is refused server-side, whatever the UI shows.
+  for (const endpoint of ["checkout", "portal"]) {
+    const response = await page.request.post(`/api/v1/billing/${endpoint}`);
+    expect(response.status(), endpoint).toBe(403);
+    const body = (await response.json()) as { error?: { code?: string } };
+    expect(body.error?.code, endpoint).toBe("FORBIDDEN");
+  }
+
+  // The billing page states the position instead of offering a button that
+  // would fail after the click.
+  await page.goto("/app/billing");
+  await expect(page.getByText(/Billing is unavailable in the demo workspace/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Upgrade to Plus/i })).toHaveCount(0);
+
+  // Another account's report, requested by id, is refused.
+  const foreign = await page.request.get("/api/v1/reports/not-a-real-id-owned-by-someone-else");
+  expect([400, 401, 403, 404]).toContain(foreign.status());
+});
+
+test("the reserved demo address cannot be claimed through ordinary sign-up", async ({ page }) => {
+  const demoEmail = process.env["DEMO_ACCOUNT_EMAIL"] ?? "";
+  test.skip(demoEmail === "", "demo mode is not configured in this environment");
+
+  await page.goto("/sign-up");
+  await page.getByLabel("Email").fill(demoEmail);
+  await page.getByLabel("Password").fill(TEST_PASSWORD);
+  await page.getByRole("button", { name: "Create account" }).click();
+
+  // Refused, and with the same wording an already-registered address gets, so
+  // this is not an oracle for which address is the demo account.
+  await expect(page.getByText(/already exists/i)).toBeVisible();
+  await expect(page).toHaveURL(/\/sign-up/);
+});

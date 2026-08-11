@@ -3,8 +3,10 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SignInForm } from "@/components/auth/sign-in-form";
 import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
+import { DemoSignInButton } from "@/components/demo/demo-sign-in-button";
 import { getSessionUser } from "@/features/auth/guards";
 import { isGoogleConfigured } from "@/features/auth/providers";
+import { demoModeConfigured } from "@/features/demo/config";
 
 export const metadata: Metadata = {
   title: "Sign in",
@@ -34,6 +36,17 @@ export default async function SignInPage({
 
       <div className="border-border bg-surface rounded-card mt-8 border p-6">
         <SignInForm callbackUrl={callbackUrl} />
+
+        {demoModeConfigured() ? (
+          <>
+            <div className="my-6 flex items-center gap-3">
+              <span className="bg-border h-px flex-1" />
+              <span className="text-text-secondary text-xs">or</span>
+              <span className="bg-border h-px flex-1" />
+            </div>
+            <DemoSignInButton callbackUrl={callbackUrl} />
+          </>
+        ) : null}
 
         {isGoogleConfigured() ? (
           <>

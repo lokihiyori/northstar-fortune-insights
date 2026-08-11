@@ -9,10 +9,10 @@ assumptions and trade-offs it carries, and what to do next.
 It is decision support, not fortune-telling. It does not predict outcomes and does not replace
 licensed professional advice.
 
-> **Status: Phases 0–8F complete.** Phases 0–7 are verified against a live database; Phase 8 adds
+> **Status: Phases 0–8G complete.** Phases 0–7 are verified against a live database; Phase 8 adds
 > security posture, rate limiting, observability, CI hardening verified by a real GitHub Actions
-> run, operations runbooks with a verified backup/restore drill, and a measured accessibility and
-> performance audit. Repository and tooling; the Quiet Aurora design system and full marketing site;
+> run, operations runbooks with a verified backup/restore drill, a measured accessibility and
+> performance audit, and an isolated, resettable recruiter demo mode. Repository and tooling; the Quiet Aurora design system and full marketing site;
 > authentication and the Build-your-compass onboarding; the app workspace (guided composer, insight
 > report, scenario comparison, action plans, history); the guidance engine — deterministic rules, pgvector
 > retrieval over a reviewed corpus, structured generation behind a provider interface, and
@@ -103,32 +103,33 @@ It is off by default so a real database can never be seeded with an elevated acc
 
 ## Commands
 
-| Command                 | What it does                                        |
-| ----------------------- | --------------------------------------------------- |
-| `pnpm dev`              | Development server                                  |
-| `pnpm build`            | Production build                                    |
-| `pnpm start`            | Serve the production build                          |
-| `pnpm format`           | Apply Prettier                                      |
-| `pnpm format:check`     | Verify formatting (CI)                              |
-| `pnpm lint`             | ESLint                                              |
-| `pnpm typecheck`        | `tsc --noEmit`                                      |
-| `pnpm test`             | Unit tests (Vitest) — no database required          |
-| `pnpm test:integration` | Integration tests — **requires PostgreSQL + Redis** |
-| `pnpm test:watch`       | Vitest in watch mode                                |
-| `pnpm test:coverage`    | Vitest with a V8 coverage report                    |
-| `pnpm test:e2e`         | Playwright end-to-end tests (starts its own server) |
-| `pnpm test:e2e:install` | Install the Playwright browser (once, and in CI)    |
-| `pnpm verify`           | format:check → lint → typecheck → test → build      |
-| `pnpm db:up`            | Start PostgreSQL and Redis                          |
-| `pnpm db:down`          | Stop them, keeping data                             |
-| `pnpm db:reset`         | Stop them and **delete the volumes**                |
-| `pnpm db:migrate`       | Create and apply a migration                        |
-| `pnpm db:deploy`        | Apply existing migrations (deployment)              |
-| `pnpm db:seed`          | Seed development data                               |
-| `pnpm db:verify`        | Assert extensions, tables, and the pgvector column  |
-| `pnpm audit:ci`         | Dependency audit, gating on high and critical       |
-| `pnpm db:generate`      | Regenerate the Prisma client                        |
-| `pnpm db:studio`        | Prisma Studio                                       |
+| Command                 | What it does                                                 |
+| ----------------------- | ------------------------------------------------------------ |
+| `pnpm dev`              | Development server                                           |
+| `pnpm build`            | Production build                                             |
+| `pnpm start`            | Serve the production build                                   |
+| `pnpm format`           | Apply Prettier                                               |
+| `pnpm format:check`     | Verify formatting (CI)                                       |
+| `pnpm lint`             | ESLint                                                       |
+| `pnpm typecheck`        | `tsc --noEmit`                                               |
+| `pnpm test`             | Unit tests (Vitest) — no database required                   |
+| `pnpm test:integration` | Integration tests — **requires PostgreSQL + Redis**          |
+| `pnpm test:watch`       | Vitest in watch mode                                         |
+| `pnpm test:coverage`    | Vitest with a V8 coverage report                             |
+| `pnpm test:e2e`         | Playwright end-to-end tests (starts its own server)          |
+| `pnpm test:e2e:install` | Install the Playwright browser (once, and in CI)             |
+| `pnpm verify`           | format:check → lint → typecheck → test → build               |
+| `pnpm db:up`            | Start PostgreSQL and Redis                                   |
+| `pnpm db:down`          | Stop them, keeping data                                      |
+| `pnpm db:reset`         | Stop them and **delete the volumes**                         |
+| `pnpm db:migrate`       | Create and apply a migration                                 |
+| `pnpm db:deploy`        | Apply existing migrations (deployment)                       |
+| `pnpm demo:reset`       | Create or restore the recruiter demo account (operator only) |
+| `pnpm db:seed`          | Seed development data                                        |
+| `pnpm db:verify`        | Assert extensions, tables, and the pgvector column           |
+| `pnpm audit:ci`         | Dependency audit, gating on high and critical                |
+| `pnpm db:generate`      | Regenerate the Prisma client                                 |
+| `pnpm db:studio`        | Prisma Studio                                                |
 
 Run `pnpm verify` before opening a pull request. CI runs the same checks.
 
@@ -539,6 +540,39 @@ Measurement, not certification:
 ```bash
 pnpm exec playwright test tests/e2e/accessibility.spec.ts
 ```
+
+## Recruiter demo
+
+A visibly labelled, isolated, resettable demo workspace (Phase 8G). Off by default.
+
+```bash
+# .env — placeholders in .env.example
+DEMO_MODE_ENABLED="true"
+DEMO_ACCOUNT_EMAIL="demo@northstar.local"
+DEMO_ACCOUNT_PASSWORD="a-long-random-passphrase"
+
+pnpm demo:reset   # create or restore the demo account
+pnpm dev          # sign-in page now offers "Explore the demo"
+```
+
+Demo status is **derived on the server** from the authenticated address against a reserved,
+server-owned value. There is deliberately no `NEXT_PUBLIC_` flag and no demo claim in the token, so
+a browser cannot assert it — and no schema column was needed, because the email is unique,
+normalized at both auth entry points, and immutable.
+
+Every authenticated demo page carries a persistent banner: _Demo workspace — fictional data. Changes
+are temporary. Do not enter personal information._ Normal accounts never see it.
+
+The demo account is `USER` and stays that way. Admin pages and APIs refuse it, Stripe Checkout and
+the Customer Portal refuse it **server-side** (so no upgrade button is shown that would fail after
+the click), and it can read the shared published corpus but never mutate it.
+
+`pnpm demo:reset` is an operator CLI — there is no HTTP reset endpoint. It refuses an unsafe
+configuration, targets one exact user id, and never performs a broad delete. Full script, guard
+table, and limitations in [`docs/demo.md`](docs/demo.md).
+
+**Known limitations:** the demo is a single shared account, resets are manual, concurrent visitors
+collide, and rate limits still apply. No deployment, no real Stripe, no real OpenAI.
 
 ## Troubleshooting: port 5432 already in use
 
