@@ -2,6 +2,16 @@ import { randomBytes } from "node:crypto";
 import { defineConfig, devices } from "@playwright/test";
 import { DEMO_DISABLED_ORIGIN, DEMO_DISABLED_PORT } from "./tests/e2e/helpers/ports";
 
+/*
+ * The *test process* needs to know the demo credentials; the *server* must not.
+ * That asymmetry is the whole point — the spec searches the served page for
+ * these values, which only proves something if it has values to search for.
+ * CI carries no `.env`, so they are defaulted here exactly as the main config
+ * does, and `disabledServerEnv()` below deletes them again for the child.
+ */
+process.env["DEMO_ACCOUNT_EMAIL"] ??= "demo-e2e@northstar.test";
+process.env["DEMO_ACCOUNT_PASSWORD"] ??= "demo-disabled-probe-value-not-a-real-secret";
+
 /**
  * A second Playwright configuration, for one thing only: proving that demo mode
  * is unusable when the server is started with it switched off.
