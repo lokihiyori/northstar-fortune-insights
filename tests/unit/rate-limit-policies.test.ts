@@ -26,11 +26,27 @@ describe("policy selection", () => {
     expect(Object.keys(POLICY_SETS).sort()).toEqual([
       "accountRead",
       "adminMutation",
+      "billingAttempt",
       "guidanceGeneration",
       "regeneration",
       "signIn",
       "signUp",
     ]);
+  });
+
+  it("limits new billing attempts per user, fails closed, and reserves", () => {
+    const policies = policiesFor("billingAttempt");
+    expect(policies).toHaveLength(1);
+
+    const [attempt] = policies;
+    expect(attempt?.subject).toBe("user");
+    expect(attempt?.limit).toBe(5);
+    expect(attempt?.windowSeconds).toBe(3600);
+    // Creating an attempt is a money path, so an unanswerable Redis refuses.
+    expect(attempt?.failureMode).toBe("closed");
+    // Reserved, so an outage or a lost claim race gives the unit back rather
+    // than burning an hour of a legitimate user's budget.
+    expect(attempt?.counting).toBe("reserved");
   });
 
   it("limits credential sign-in by both address and account", () => {

@@ -50,6 +50,7 @@ model User {
   subscription Subscription?
   events       AnalyticsEvent[]
   auditLogs    AuditLog[]
+  checkoutAttempts CheckoutAttempt[]
 
   @@index([createdAt])
   @@map("users")
@@ -606,8 +607,21 @@ model Subscription {
   id     String @id @default(cuid())
   userId String @unique
 
-  plan   SubscriptionPlan   @default(FREE)
+  plan SubscriptionPlan @default(FREE)
+
+  /// Coarse, **rollback-compatible** status. Only ever receives the six labels
+  /// that existed before the concurrency fix, so an older generated Prisma
+  /// Client can always deserialize this column. Statuses without a label here
+  /// (`paused`, `incomplete_expired`, anything Stripe adds later) are stored in
+  /// `stripeStatusRaw` and coerced to `INCOMPLETE` — exactly the pre-fix
+  /// behaviour. Never add a label to `SubscriptionStatus` without accepting
+  /// that rollback becomes unsafe the moment one row carries it.
   status SubscriptionStatus @default(ACTIVE)
+
+  /// The exact Stripe status string. **This is what business logic reads.**
+  /// A closed enum cannot represent a status Stripe has not shipped yet, and an
+  /// unknown status must still be able to block a second subscription.
+  stripeStatusRaw String?
 
   stripeCustomerId     String?
   stripeSubscriptionId String?
@@ -615,6 +629,32 @@ model Subscription {
 
   currentPeriodEnd  DateTime?
   cancelAtPeriodEnd Boolean   @default(false)
+
+  /// How many matching subscriptions currently grant PLUS. `>= 1` is the whole
+  /// entitlement test; the projection is derived from the full Stripe set, never
+  /// from the event that triggered reconciliation.
+  entitledCount Int @default(0)
+
+  /// How many matching subscriptions are *live* — entitled plus `past_due`,
+  /// `unpaid`, `incomplete`, `paused`, and unknown. `> 1` is the duplicate-risk
+  /// signal, and it is deliberately wider than `entitledCount`: an
+  /// `active` + `past_due` pair is a duplicate that bills twice while only one
+  /// of the two grants access.
+  matchingBlockingCount Int @default(0)
+
+  /// When the projection was last derived from a live Stripe read. Null means
+  /// "never reconciled" — true for every row created before this fix.
+  reconciledAt DateTime?
+
+  /// Set when billing must not proceed until an operator intervenes, e.g. more
+  /// than one Stripe Customer resolves to this user. Checkout refuses while set.
+  billingBlockedReason String?
+
+  /// Alert de-duplication only — never correctness state. Written in a separate
+  /// short transaction *after* a failed reconciliation has rolled back, because
+  /// anything written inside that transaction would roll back with it.
+  reconcileFailureCount Int       @default(0)
+  reconcileFailedAt     DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -627,6 +667,105 @@ model Subscription {
   @@unique([stripeSubscriptionId])
   @@index([status])
   @@map("subscriptions")
+}
+
+enum CheckoutAttemptStatus {
+  /// Claimed, but no Stripe Session exists yet.
+  PENDING
+  /// A Stripe Checkout Session exists and is open.
+  OPEN
+  /// The subscription arrived. Terminal.
+  COMPLETED
+  /// The Session expired or was explicitly expired. Terminal.
+  EXPIRED
+  /// Unrecoverable — Stripe returned an unexpected shape. Terminal.
+  FAILED
+}
+
+/// One user's in-flight intent to subscribe.
+///
+/// **This table is the concurrency-correctness mechanism for billing.** Two
+/// simultaneous checkout requests cannot both create a Stripe Customer or a
+/// Checkout Session, because `activeForUserId` is `@unique` and only the insert
+/// winner is allowed to contact Stripe. Redis is deliberately not involved:
+/// ADR 0004 says Redis holds only data that may be lost without correctness
+/// consequences, and a lost lock here means a duplicate charge.
+///
+/// The row also carries an **immutable snapshot of the Stripe request**. Stripe
+/// compares parameters when an idempotency key is reused, so recomputing any
+/// value on retry (an expiry from the clock, a URL from the environment, the
+/// currently configured Price) turns recovery into `idempotency_error`. Every
+/// replay is rebuilt from these columns and nothing else.
+model CheckoutAttempt {
+  id String @id @default(cuid())
+
+  userId String
+
+  /// Null until the claim winner resolves or creates the Customer. Nullable on
+  /// purpose: the claim must be held *before* any Stripe call, otherwise two
+  /// requests can create two Customers before either writes one down.
+  stripeCustomerId String?
+
+  /// `userId` while the attempt is live, `null` once terminal. PostgreSQL allows
+  /// many nulls in a unique index, so this expresses "at most one live attempt
+  /// per user" without a partial index Prisma cannot describe.
+  activeForUserId String? @unique
+
+  status CheckoutAttemptStatus @default(PENDING)
+
+  // --- immutable request snapshot -----------------------------------------
+  // Every field a replay needs. `buildSessionRequest` reads these and nothing
+  // else — no clock, no environment, no live Price lookup.
+
+  /// Bumped when the request shape changes. A different version forces a new
+  /// attempt through the recovery gate rather than mutating a live one.
+  requestVersion Int @default(1)
+
+  /// The `expires_at` sent to Stripe, stored to exact-second precision.
+  /// A `DateTime`, not an `Int`: a 32-bit integer cannot hold a Unix timestamp
+  /// safely, and the conversion to seconds must be identical on every retry.
+  requestedSessionExpiresAt DateTime
+
+  successUrl          String
+  cancelUrl           String
+  stripePriceId       String
+  allowPromotionCodes Boolean @default(true)
+
+  /// Stable metadata applied to both the Session and `subscription_data`.
+  /// Opaque identifiers only — never an email address or anything user-authored.
+  metadataJson Json
+
+  /// Opaque, per-attempt, random. Used as the Stripe idempotency key for
+  /// Customer creation. Deliberately **not** derived from `userId`: an
+  /// account-global idempotency key should not be guessable from an internal id.
+  customerIdemKey String @unique
+
+  // --- Stripe results ------------------------------------------------------
+
+  /// The Checkout Session id. The Session **URL is never persisted** — it is
+  /// bearer-like, so it is fetched server-side, revalidated, and redirected to.
+  stripeSessionId String? @unique
+
+  /// Stripe's returned `expires_at`. Authoritative: a local timeout never makes
+  /// a remotely open Session safe to replace.
+  remoteExpiresAt DateTime?
+
+  /// Short crash-detection lease. A lapsed lease lets another request take the
+  /// attempt over — reusing the same id, and therefore the same idempotency key,
+  /// so takeover can never produce a second Session.
+  leaseExpiresAt DateTime
+
+  /// Sweep hint only. Never on its own a reason to free an attempt.
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, leaseExpiresAt])
+  @@map("checkout_attempts")
 }
 
 /// Every webhook delivery Stripe has sent us, so replays are no-ops.

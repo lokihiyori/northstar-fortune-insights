@@ -322,6 +322,50 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
   before and after every reset. **The isolation claim must never rest on UI hiding.**
 - Demo mode is **off by default** and unconfigured for production. Do not describe it as deployed.
 
+## Billing concurrency and reconciliation (D1/D2/D3 closure)
+
+- **PostgreSQL is the concurrency-correctness mechanism; Redis is defence in depth.** The
+  `CheckoutAttempt.activeForUserId` nullable-unique column elects one live attempt per user. ADR 0004
+  forbids Redis from carrying anything whose loss is a correctness consequence, and a lost lock here
+  is a duplicate charge.
+- **The claim is taken before any Stripe call**, and `stripeCustomerId` starts null. Resolving the
+  Customer first lets two concurrent first-time requests create two Customers.
+- **The attempt id is the Stripe idempotency key.** Every caller that reaches the same row presents
+  an identical key, so a lost response, a crash takeover, or a retry recovers the original object.
+  The attempt TTL (20 h) sits below Stripe's 24 h key retention so the local row always expires first.
+- **`buildSessionRequest` reads the row and nothing else** — no clock, no environment, no live Price
+  lookup. Stripe compares parameters on key reuse, so a recomputed value turns recovery into
+  `idempotency_error`. Bump `requestVersion` rather than mutating a live attempt.
+- **Every URL-returning path re-checks the authoritative subscription set and enumerates open
+  Sessions**, under the same per-customer advisory lock the webhook takes. A stored
+  `stripeSessionId` never short-circuits discovery.
+- **Entitlement is derived from the complete matching set, never from the triggering event**, by a
+  canonical rule that is a pure function of that set. `entitledCount >= 1` is the whole test.
+- **Blocking is wider than entitlement.** `past_due`, `unpaid`, `paused`, and `incomplete` grant
+  nothing and still block a second subscription.
+- **Never add a label to `SubscriptionStatus`.** An older generated Prisma Client throws on an
+  unknown enum value, so one row would make rollback unsafe. New statuses live in `stripeStatusRaw`.
+- **Mode comes from the key prefix, never `NODE_ENV`** (`features/billing/mode.ts`). This project
+  runs `NODE_ENV=production` against test keys.
+- **The Checkout URL is bearer-like.** It is never persisted, logged, or returned in JSON; the
+  redaction allow-list refuses any field name matching `url`. `POST /checkout` returns a path and
+  `GET /checkout/continue` revalidates server-side before redirecting.
+
+### Verifying billing locally
+
+```
+pnpm db:up                     # PostgreSQL + Redis
+pnpm db:deploy && pnpm db:verify
+pnpm test                      # unit, no services
+pnpm test:integration          # real PostgreSQL + Redis, Stripe faked at the boundary
+pnpm exec playwright test tests/e2e/billing.spec.ts
+node --env-file=.env scripts/report-open-checkout-sessions.mjs   # read-only, test mode only
+```
+
+**Automated tests inject Stripe at the external boundary. They prove this application's logic and
+nothing about Stripe itself.** Only a real test-mode run proves the integration, and that has not
+been repeated since the fix.
+
 ## Current phase
 
 **Phases 0–8G complete.** Phases 0–7 are verified against a live database, with one explicit

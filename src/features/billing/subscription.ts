@@ -20,16 +20,35 @@ export async function getSubscription(userId: string) {
     select: {
       plan: true,
       status: true,
+      stripeStatusRaw: true,
       currentPeriodEnd: true,
       cancelAtPeriodEnd: true,
       stripeCustomerId: true,
+      entitledCount: true,
+      matchingBlockingCount: true,
+      reconciledAt: true,
+      billingBlockedReason: true,
     },
   });
 }
 
+/**
+ * Entitlement, derived from the reconciled projection.
+ *
+ * `entitledCount` is authoritative once a live reconciliation has happened: it
+ * counts the matching subscriptions Stripe currently reports as `active` or
+ * `trialing`, so one subscription being cancelled while another remains does not
+ * revoke access. Rows that predate the fix have `reconciledAt === null` and fall
+ * back to the original plan/status rule, which the migration backfill made
+ * agree with the counts for every legacy shape.
+ */
 export async function effectivePlan(userId: string): Promise<"free" | "plus"> {
   const subscription = await getSubscription(userId);
   if (!subscription) return "free";
+
+  if (subscription.reconciledAt !== null) {
+    return subscription.entitledCount >= 1 ? "plus" : "free";
+  }
 
   const entitled = subscription.plan === "PLUS" && ENTITLED.includes(subscription.status);
   return entitled ? "plus" : "free";
