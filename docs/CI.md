@@ -215,3 +215,30 @@ does, it is reported honestly under the rules above; the pin is not a reason to 
   one on-demand-compiling dev server starved whichever journey was unlucky. A GitHub runner has
   different CPU characteristics, so the value may be revisited once real CI timings exist — with
   evidence, not by guessing.
+
+## Billing tests: faked boundary versus real Stripe
+
+CI never holds Stripe credentials, and the billing suites do not need them.
+
+- **Unit** (`tests/unit/billing-*.test.ts`) — pure: the status table, the canonical rule and its
+  permutation invariance, and mode derivation from a key prefix. No I/O.
+- **Integration** (`tests/integration/billing-*.test.ts`) — **real PostgreSQL and real Redis**,
+  because the correctness mechanisms _are_ a PostgreSQL unique index, a PostgreSQL advisory lock,
+  and a Redis counter. Stripe is injected at the external API boundary by
+  `tests/integration/helpers/fake-stripe.ts`, which counts calls and implements idempotency-key
+  replay and Session expiry.
+- **E2E** (`tests/e2e/billing.spec.ts`) — the seven billing states and the continue route's
+  redirect safety, driven through the browser.
+
+**What the faked boundary proves and does not prove.** It proves how many times the application
+calls Stripe, which object it reuses, and what it writes — the D1/D2/D3 properties. It proves
+nothing about Stripe's own behaviour. Statements about Stripe require a real test-mode run, which is
+a manual step and is never part of CI.
+
+Local commands:
+
+```
+pnpm db:up
+pnpm test:integration
+pnpm exec playwright test tests/e2e/billing.spec.ts
+```

@@ -58,6 +58,26 @@ export const LOG_EVENTS = [
   "analytics.write_failed",
   "billing.request_failed",
   "webhook.processing_failed",
+
+  // --- billing concurrency and reconciliation ------------------------------
+  // Identifiers and counts only. No amount, no card, no invoice, no email, and
+  // never a Checkout URL — the redaction allow-list refuses any field whose name
+  // matches `url`, which makes that last one structurally impossible.
+  "billing.attempt_opened",
+  "billing.blocked",
+  "billing.duplicate_customer",
+  "billing.duplicate_active_subscriptions",
+  "billing.mode_mismatch",
+  "billing.session_foreign_attempt",
+  "billing.session_ambiguous",
+  "billing.session_unexpected_shape",
+  "billing.session_expire_unconfirmed",
+  "billing.discovery_incomplete",
+  "billing.reconcile_incomplete",
+  "billing.reconcile_failure_unrecorded",
+  "billing.attempt_mismatch",
+  "billing.unmapped_customer_event",
+  "billing.cross_linked_metadata",
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];

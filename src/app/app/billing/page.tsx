@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { BillingActionButton } from "@/components/billing/upgrade-button";
+import { BillingActionButton, ContinueCheckoutLink } from "@/components/billing/upgrade-button";
 import { Badge } from "@/components/ui/badge";
 import { UsageMeter } from "@/components/ui/usage-meter";
 import { requireUser } from "@/features/auth/guards";
@@ -7,6 +7,7 @@ import { isDemoSession } from "@/features/demo/session";
 import { getEntitlements } from "@/features/billing/entitlements";
 import { isBillingConfigured } from "@/features/billing/stripe";
 import { getSubscription } from "@/features/billing/subscription";
+import { liveAttemptForUser } from "@/features/billing/checkout-attempt";
 import { countReportsThisPeriod } from "@/features/guidance/usage";
 import { PLANS, PRICING_NOTE } from "@/features/billing/plans";
 
@@ -31,6 +32,34 @@ export default async function BillingPage({
   const isPlus = entitlements.plan === "plus";
   const checkout = params["checkout"];
 
+  /**
+   * Pending-checkout state, read from local rows only.
+   *
+   * No Stripe call happens on render: the attempt table answers "is a checkout
+   * in flight", and the projection answers "what does Stripe currently say".
+   * Calling Stripe here would put a network round trip on every page view and
+   * make the page fail when Stripe is slow.
+   */
+  const attempt = await liveAttemptForUser(user.id);
+  const attemptState: "none" | "preparing" | "open" | "processing" =
+    attempt === null
+      ? "none"
+      : attempt.status === "PENDING"
+        ? "preparing"
+        : attempt.status === "OPEN"
+          ? "open"
+          : "processing";
+
+  /**
+   * A live subscription that grants nothing — past_due, unpaid, paused, or
+   * incomplete. Blocking and entitlement are separate questions, and conflating
+   * them is what let a user in this state buy a second subscription.
+   */
+  const isBlockedNotEntitled =
+    !isPlus && subscription !== null && (subscription.matchingBlockingCount ?? 0) > 0;
+
+  const duplicateRisk = (subscription?.matchingBlockingCount ?? 0) > 1;
+
   return (
     <div className="mx-auto max-w-3xl">
       <h1 className="text-2xl font-semibold tracking-tight">Plan and usage</h1>
@@ -51,6 +80,19 @@ export default async function BillingPage({
         <div className="border-border bg-surface-raised rounded-control mt-6 border p-4">
           <p className="text-text-secondary text-sm">
             Checkout was cancelled. Nothing was charged.
+          </p>
+        </div>
+      ) : null}
+
+      {duplicateRisk ? (
+        <div
+          role="alert"
+          className="border-warning/40 bg-warning/10 rounded-control mt-6 border p-4"
+        >
+          <p className="text-sm">
+            We can see more than one live subscription on your billing account. You may be being
+            charged more than once. Open <strong>Manage billing</strong> to review them, or contact
+            support and we will sort it out — please do not start another subscription.
           </p>
         </div>
       ) : null}
@@ -130,6 +172,62 @@ export default async function BillingPage({
                 <code className="mx-1 font-mono text-xs">STRIPE_PLUS_PRICE_ID</code>, and
                 <code className="mx-1 font-mono text-xs">STRIPE_WEBHOOK_SECRET</code> to enable it.
               </p>
+            ) : subscription?.billingBlockedReason ? (
+              /*
+               * More than one Stripe Customer resolved to this account. Probing
+               * subscriptions on one of them could create a second subscription
+               * while another already holds one, so billing stays closed until
+               * an operator has reconciled it.
+               */
+              <p role="status" className="text-text-secondary text-sm">
+                Billing needs a manual review for this account before it can continue. Please
+                contact support — no action is needed from you, and nothing has been charged.
+              </p>
+            ) : attemptState === "preparing" ? (
+              /*
+               * Claimed but no Session exists yet. Deliberately offers no
+               * Continue link and no second Upgrade: there is nothing to
+               * continue to, and arming Upgrade here is what produced D1.
+               */
+              <p role="status" className="text-text-secondary text-sm">
+                Preparing checkout… This usually takes a moment. Refresh the page to see the latest
+                state.
+              </p>
+            ) : attemptState === "open" ? (
+              <div>
+                <ContinueCheckoutLink label="Continue checkout" />
+                <p className="text-text-secondary mt-3 text-sm">
+                  You already have a checkout in progress. Continuing uses the same session, so you
+                  will not be charged twice.
+                </p>
+              </div>
+            ) : attemptState === "processing" ? (
+              /*
+               * Payment taken, projection not yet updated. Access is granted by
+               * the webhook, never by the redirect — so this state waits rather
+               * than offering another upgrade.
+               */
+              <p role="status" className="text-text-secondary text-sm">
+                Payment processing. Your plan updates as soon as Stripe confirms it — this is
+                usually immediate. Refresh the page to check.
+              </p>
+            ) : isBlockedNotEntitled ? (
+              /*
+               * past_due, unpaid, paused, or incomplete: a live subscription
+               * that grants nothing. Offering "Upgrade" here sells a second
+               * subscription to someone who already has one.
+               */
+              <div>
+                <BillingActionButton
+                  endpoint="portal"
+                  label="Update payment method"
+                  variant="secondary"
+                />
+                <p className="text-text-secondary mt-3 text-sm">
+                  There is a problem with your existing subscription. Update your payment details to
+                  restore access — starting a new subscription would charge you twice.
+                </p>
+              </div>
             ) : isPlus ? (
               <BillingActionButton endpoint="portal" label="Manage billing" variant="secondary" />
             ) : (

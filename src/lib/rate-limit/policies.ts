@@ -179,6 +179,33 @@ export const RATE_LIMIT_POLICIES = {
   },
 
   /**
+   * Genuinely new Checkout attempts.
+   *
+   * **Defence in depth only.** Uniqueness comes from the `activeForUserId`
+   * unique index in PostgreSQL, never from this counter — a Redis outage must
+   * not be able to cause a duplicate charge, which is why ADR 0004 forbids
+   * putting correctness here.
+   *
+   * Charged only when a new attempt is claimed. Reusing a verified Session,
+   * recovering a PENDING attempt, redirecting through continue, and reading
+   * payment state all consume nothing: those are recovery, and a user must not
+   * be locked out of finishing a checkout they already started.
+   *
+   * `reserved`, so an outage or a lost claim race gives the unit back rather
+   * than burning an hour of a legitimate user's budget.
+   */
+  BILLING_ATTEMPT_USER: {
+    id: "billing_attempt_user",
+    subject: "user",
+    limit: 5,
+    windowSeconds: 60 * MINUTE,
+    failureMode: "closed",
+    counting: "reserved",
+    rationale:
+      "Five genuinely new Checkout attempts per user per hour. Fails closed because creating an attempt is a money path; recovery of an existing attempt is never charged, so a Redis outage cannot strand a user mid-checkout.",
+  },
+
+  /**
    * The fail-open case. A Redis outage must not take account reads offline —
    * PostgreSQL is the source of truth and this endpoint is cheap (ADR 0004).
    */
@@ -208,6 +235,7 @@ export const POLICY_SETS = {
   regeneration: ["REGENERATION_USER"],
   adminMutation: ["ADMIN_MUTATION_USER", "ADMIN_MUTATION_IP"],
   accountRead: ["READ_API_USER"],
+  billingAttempt: ["BILLING_ATTEMPT_USER"],
 } as const satisfies Record<string, readonly PolicyName[]>;
 
 export type OperationName = keyof typeof POLICY_SETS;
