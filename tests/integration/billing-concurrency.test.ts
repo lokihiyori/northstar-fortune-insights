@@ -34,6 +34,93 @@ const APP_URL = "http://localhost:3000";
 let fake: FakeStripe;
 const createdUserIds: string[] = [];
 
+/**
+ * Every account the seed *may* have created. Which of them actually exist is an
+ * environment fact, not an invariant: `prisma/seed.ts` upserts the developer
+ * account unconditionally, creates the admin only under `SEED_ADMIN=true`, and
+ * never creates the demo account at all — that one comes from the demo tooling.
+ * CI deliberately runs the seed with both unset, so it has the developer account
+ * and nothing else.
+ *
+ * So the property under test is *invariance*, not composition: whatever exists
+ * before this suite runs must be identical afterwards, and whatever is absent
+ * must stay absent.
+ */
+const SEEDED_CANDIDATES = [
+  "admin@northstar.local",
+  "demo@northstar.local",
+  "dev@northstar.local",
+] as const;
+
+type SeededSnapshot = {
+  id: string;
+  email: string;
+  role: string;
+  /** Null when the account has no projection row at all — itself a difference. */
+  subscription: Record<string, unknown> | null;
+  checkoutAttempts: { id: string; status: string; claimHeld: boolean }[];
+};
+
+/**
+ * Billing-relevant fingerprint of the candidate accounts, ordered by email so
+ * two snapshots are comparable directly. Covers every column this suite writes
+ * through `writeProjection` and `runCheckoutFlow`, plus the attempt rows — a
+ * seeded account acquiring one would be the leak this test exists to catch.
+ */
+async function fingerprintSeededAccounts(): Promise<SeededSnapshot[]> {
+  const users = await prisma.user.findMany({
+    where: { email: { in: [...SEEDED_CANDIDATES] } },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      subscription: {
+        select: {
+          plan: true,
+          status: true,
+          stripeStatusRaw: true,
+          stripeCustomerId: true,
+          stripeSubscriptionId: true,
+          stripePriceId: true,
+          currentPeriodEnd: true,
+          cancelAtPeriodEnd: true,
+          entitledCount: true,
+          matchingBlockingCount: true,
+          reconciledAt: true,
+          billingBlockedReason: true,
+        },
+      },
+      checkoutAttempts: {
+        select: { id: true, status: true, activeForUserId: true },
+        orderBy: { id: "asc" },
+      },
+    },
+    orderBy: { email: "asc" },
+  });
+
+  // Dates are normalized to ISO strings so the comparison is by value.
+  return users.map((user) => ({
+    id: user.id,
+    email: user.email,
+    role: String(user.role),
+    subscription: user.subscription
+      ? {
+          ...user.subscription,
+          currentPeriodEnd: user.subscription.currentPeriodEnd?.toISOString() ?? null,
+          reconciledAt: user.subscription.reconciledAt?.toISOString() ?? null,
+        }
+      : null,
+    checkoutAttempts: user.checkoutAttempts.map((attempt) => ({
+      id: attempt.id,
+      status: String(attempt.status),
+      claimHeld: attempt.activeForUserId !== null,
+    })),
+  }));
+}
+
+/** Captured before the first mutation, compared after the last one. */
+let seededBaseline: SeededSnapshot[] = [];
+
 async function makeUser(): Promise<string> {
   const user = await prisma.user.create({
     data: { email: `billing-${randomUUID()}@northstar.test`, role: "USER" },
@@ -43,11 +130,14 @@ async function makeUser(): Promise<string> {
   return user.id;
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   process.env["STRIPE_SECRET_KEY"] = "sk_test_0000000000000000000000000000";
   process.env["STRIPE_PLUS_PRICE_ID"] = PRICE;
   process.env["STRIPE_WEBHOOK_SECRET"] = "whsec_test_0000000000000000";
   process.env["NEXT_PUBLIC_APP_URL"] = APP_URL;
+
+  // File-level, so it runs before any test in this file has mutated anything.
+  seededBaseline = await fingerprintSeededAccounts();
 });
 
 beforeEach(() => {
@@ -384,23 +474,34 @@ describe("D2: entitlement follows the whole Stripe set", () => {
 // --- isolation ------------------------------------------------------------
 
 describe("isolation", () => {
-  it("leaves seeded developer, admin, and demo accounts untouched", async () => {
-    const seeded = await prisma.user.findMany({
-      where: { email: { endsWith: "@northstar.local" } },
-      select: { email: true, role: true },
-      orderBy: { email: "asc" },
-    });
+  it("leaves all pre-existing seeded accounts and billing projections unchanged", async () => {
+    /*
+     * The seed upserts the developer account unconditionally, so an empty
+     * baseline means the database was never seeded and every comparison below
+     * would be vacuously true. Fail loudly instead of passing on nothing.
+     */
+    expect(seededBaseline.length).toBeGreaterThan(0);
+    expect(seededBaseline.map((row) => row.email)).toContain("dev@northstar.local");
 
-    expect(seeded.map((u) => u.email)).toEqual([
-      "admin@northstar.local",
-      "demo@northstar.local",
-      "dev@northstar.local",
-    ]);
+    // Runs last in the file, so every checkout and reconciliation above has
+    // already committed.
+    const after = await fingerprintSeededAccounts();
 
-    // And none of them acquired billing state from this suite.
-    const withBilling = await prisma.subscription.count({
-      where: { user: { email: { endsWith: "@northstar.local" } } },
-    });
-    expect(withBilling).toBe(0);
+    /*
+     * Exact equality in both directions: an account that existed must be
+     * byte-identical — same role, same projection columns, same attempt rows —
+     * and an account that was absent must still be absent, because a longer
+     * array cannot equal a shorter one.
+     */
+    expect(after).toEqual(seededBaseline);
+
+    /*
+     * The only mutation still outstanding is the `afterAll` cleanup, which
+     * deletes strictly by id from `createdUserIds`. Proving those ids are
+     * disjoint from the seeded accounts is what makes the equality above hold
+     * through teardown as well.
+     */
+    const seededIds = new Set(seededBaseline.map((row) => row.id));
+    expect(createdUserIds.filter((id) => seededIds.has(id))).toEqual([]);
   });
 });
