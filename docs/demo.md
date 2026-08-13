@@ -114,6 +114,7 @@ reachable from the profile page if someone asks to see it.
 - **Concurrent visitors collide.** Two people demoing at once share the same reports and plans.
 - **Rate limits still apply** — 3 generations per 15 minutes for the account, shared across
   visitors. A busy demo can hit that.
-- **No deployment**, no real Stripe, no real OpenAI. Billing is refused for the demo account
-  server-side, and Stripe remains unverified overall.
+- **No deployment**, no real Stripe in the demo, no real OpenAI. Billing is refused for the demo
+  account server-side. Stripe has been verified once manually in test mode elsewhere in the
+  project; that run never involved the demo account, and live mode remains unverified.
 - **Not production-ready.** Nothing here has run in production.

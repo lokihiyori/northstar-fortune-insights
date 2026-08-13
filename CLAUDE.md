@@ -363,8 +363,13 @@ node --env-file=.env scripts/report-open-checkout-sessions.mjs   # read-only, te
 ```
 
 **Automated tests inject Stripe at the external boundary. They prove this application's logic and
-nothing about Stripe itself.** Only a real test-mode run proves the integration, and that has not
-been repeated since the fix.
+nothing about Stripe itself.** Only a real test-mode run proves the integration, and one was
+completed after the fix: a manually completed Stripe-hosted Checkout produced exactly one Customer,
+Session, Subscription, and paid Invoice on the server-owned CAD $18 monthly Price, with `userId` and
+`attemptId` propagating from the Session to the Subscription, genuine signed webhooks driving
+FREE → PLUS and back to FREE on cancellation, and a second upgrade refused with `409 CONFLICT`.
+**The Customer Portal was not re-exercised after the D1/D2/D3 fixes** — do not describe it as
+verified.
 
 ## Current phase
 
@@ -385,8 +390,27 @@ describe the project as production-ready.
 `tests/e2e/guidance.spec.ts` and `tests/e2e/admin.spec.ts` drive the real pipelines against real
 PostgreSQL — no mocks.
 
-**Still unverified: Stripe.** Checkout, Customer Portal, and webhook execution have never run
-against Stripe because no test-mode credentials are configured. The code exists and degrades
-cleanly without keys; do not describe it as verified until `stripe listen` has exercised it.
+**Stripe: verified in test mode, once.** The D1/D2/D3 concurrency and reconciliation fixes are
+merged (`dfc2b74`), and after the merge the unit, real-PostgreSQL/Redis integration, and Playwright
+suites all passed on GitHub Actions. Keep the three categories below distinct — collapsing them is
+how "verified" turns into a claim the project cannot support.
 
-Next: no phase is scheduled. Do not begin one without approval.
+- **Verified in Stripe test mode.** One manually completed hosted Checkout Session created exactly
+  one Customer, one Subscription, and one paid Invoice on the server-owned CAD $18 monthly Price,
+  with no duplicate subscription. Two concurrent tabs converged on a single attempt. `userId` and
+  `attemptId` propagated from the Session to the Subscription. A genuine signed webhook completed
+  the correct `CheckoutAttempt`, the projection moved FREE → PLUS, a duplicate upgrade was refused,
+  and a genuine cancellation webhook returned it to FREE.
+- **Still unverified operationally.** This was one bounded manual run in **test mode, never live**,
+  with delivery through `stripe listen` rather than a deployed public endpoint. The Customer Portal
+  has not been re-exercised since the fixes. Declined cards, 3DS/SCA, `past_due`, `unpaid`,
+  `paused`, proration, webhook retries, delayed or out-of-order delivery, and endpoint-secret
+  rotation are all unverified.
+- **Not implemented.** Tax and multi-currency: the product is CAD-only. There is no production
+  deployment, HTTPS origin, public webhook endpoint, backup provider, monitoring vendor, or proxy
+  configuration.
+
+**The project is not production-ready and is not approved for live payments.**
+
+Next: no new phase is scheduled, and none should begin without approval. The recommended next work
+is (1) test-hygiene cleanup and (2) deployment planning for a portfolio/recruiter demo.

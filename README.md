@@ -39,10 +39,19 @@ licensed professional advice.
 >
 > **Known limitations**
 >
-> - **Stripe is implemented but unverified.** Checkout, Customer Portal, and webhook handling have
->   never run against Stripe, because no test-mode credentials are configured. Billing degrades
->   cleanly without keys — the upgrade path is disabled and explained rather than failing. Do not
->   treat it as working until `stripe listen` has exercised it.
+> - **Stripe is verified in test mode, once — not in live mode, and not operationally.** A manually
+>   completed Stripe-hosted Checkout Session created exactly one Customer, Subscription, and paid
+>   Invoice on the server-owned CAD $18 monthly Price, with no duplicate subscription; two
+>   concurrent tabs converged on one attempt; `userId` and `attemptId` propagated from the Session
+>   to the Subscription; genuine signed webhooks moved the projection FREE → PLUS and back to FREE
+>   on cancellation; and a duplicate upgrade was refused. Delivery was through `stripe listen`, not
+>   a deployed public endpoint, and the Customer Portal has not been re-exercised since the
+>   concurrency fixes. Declined cards, 3DS/SCA, `past_due`, `unpaid`, `paused`, proration, webhook
+>   retries, delayed or out-of-order delivery, and endpoint-secret rotation remain unverified.
+>   Billing still degrades cleanly without keys — the upgrade path is disabled and explained rather
+>   than failing.
+> - **Tax and multi-currency are not implemented.** Pricing is CAD-only. There is no `automatic_tax`
+>   configuration and no tax registration, so nothing here is ready for live payments.
 > - **The real OpenAI embedder is not wired up.** `resolveEmbedder()` always returns the
 >   deterministic embedder. Switching would require re-embedding the whole corpus, which needs a
 >   migration strategy rather than a flag flip.

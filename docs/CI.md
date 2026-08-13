@@ -3,10 +3,10 @@
 `.github/workflows/ci.yml` runs on pushes to `main`, on every pull request, and on manual
 dispatch. Two jobs, one gate.
 
-> **Not yet proven remotely.** Everything below has been verified by running the same commands
-> locally against the same service images, including a database built from scratch. No GitHub
-> Actions run has executed this workflow. Remote CI is **UNVERIFIED** until a real run passes with
-> both jobs green and neither skipped.
+> **Proven remotely.** Real GitHub Actions runs have executed this workflow with both jobs green and
+> neither skipped, on a pull request and again on the resulting `main` merge commit. The same
+> commands were also verified locally against the same service images, including a database built
+> from scratch.
 
 ## Jobs
 
@@ -203,14 +203,13 @@ does, it is reported honestly under the rules above; the pin is not a reason to 
 
 ## Known limitations
 
-- **Remote CI is UNVERIFIED.** No GitHub Actions run has executed this workflow. Local verification
-  is not the same thing, and this document does not claim it is.
 - **The production server configuration is not exercised end to end** — see the `next dev` section.
 - **Per-IP rate limiting is not demonstrated.** `RATE_LIMIT_TRUSTED_PROXY_HOPS=0` in CI, matching
   production, so those four policies are inert. The production hop count remains undecided because
   no deployment proxy has been chosen (ADR 0008).
-- **Stripe remains unverified.** No test-mode credentials exist, so CI exercises the degraded path
-  only.
+- **CI never exercises Stripe.** It holds no Stripe credentials by design, so it runs the degraded
+  billing path only. Stripe itself has been verified once, manually, in test mode — a separate step
+  that is deliberately not part of CI and is not repeated by it.
 - e2e runs with `workers: 1`. That value was chosen from local evidence: two workers contending for
   one on-demand-compiling dev server starved whichever journey was unlucky. A GitHub runner has
   different CPU characteristics, so the value may be revisited once real CI timings exist — with
