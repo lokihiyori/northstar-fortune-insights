@@ -17,6 +17,40 @@ import { SEEDED_USER, TEST_PASSWORD, uniqueEmail } from "./helpers/db";
 const connectionString = process.env["DATABASE_URL"];
 if (!connectionString) throw new Error("DATABASE_URL is not set.");
 
+/**
+ * Whether the server under test has billing configured.
+ *
+ * **Presence only.** No credential value is read, compared, printed, or
+ * asserted on — this is the same boolean shape as `isBillingConfigured()` in
+ * `src/features/billing/stripe.ts`, which is what the page branches on.
+ *
+ * The spec and the server agree because they read the same environment: this
+ * file imports `./helpers/db`, which loads dotenv, and Next loads the same
+ * `.env` for the server Playwright spawns. CI deliberately supplies no Stripe
+ * variables, so both are unconfigured there and the degraded branch is the one
+ * that runs — which is the point. The states below are a property of *what the
+ * server decides to show*, and "nothing, honestly explained" is a real answer
+ * that deserves a real assertion rather than a skip.
+ */
+const BILLING_CONFIGURED = Boolean(
+  process.env["STRIPE_SECRET_KEY"] &&
+  process.env["STRIPE_PLUS_PRICE_ID"] &&
+  process.env["STRIPE_WEBHOOK_SECRET"],
+);
+
+/**
+ * The degraded contract: the page states its position and offers no billing
+ * action at all — not an upgrade, not a continuation, not a recovery, not the
+ * Portal. Every one of those would be a control that fails after the click.
+ */
+async function expectNoBillingActionsOffered(page: import("@playwright/test").Page): Promise<void> {
+  await expect(page.getByText(/Billing is not configured on this deployment/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Continue checkout" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Update payment method" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Manage billing" })).toHaveCount(0);
+}
+
 async function sql<T>(fn: (client: Client) => Promise<T>): Promise<T> {
   const client = new Client({ connectionString });
   await client.connect();
@@ -101,7 +135,7 @@ test.describe("billing page states", () => {
     await expect(page.getByText("Plan and usage")).toBeVisible();
   });
 
-  test("a PENDING attempt shows Preparing checkout and offers no Continue or Upgrade", async ({
+  test("a PENDING attempt shows Preparing checkout when billing is configured, and the not-configured notice otherwise", async ({
     page,
   }) => {
     const email = await signUp(page);
@@ -109,12 +143,21 @@ test.describe("billing page states", () => {
 
     await page.goto("/app/billing");
 
-    await expect(page.getByText(/Preparing checkout/i)).toBeVisible();
-    await expect(page.getByRole("link", { name: "Continue checkout" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    if (BILLING_CONFIGURED) {
+      await expect(page.getByText(/Preparing checkout/i)).toBeVisible();
+      await expect(page.getByRole("link", { name: "Continue checkout" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    } else {
+      // The page short-circuits before the attempt states are reached, so
+      // expecting "Preparing checkout" here would assert a render that
+      // deliberately never happens.
+      await expectNoBillingActionsOffered(page);
+    }
   });
 
-  test("an OPEN attempt shows Continue checkout and no second Upgrade", async ({ page }) => {
+  test("an OPEN attempt shows Continue checkout when billing is configured, and the not-configured notice otherwise", async ({
+    page,
+  }) => {
     const email = await signUp(page);
     await insertAttempt(
       await userId(email),
@@ -124,11 +167,15 @@ test.describe("billing page states", () => {
 
     await page.goto("/app/billing");
 
-    await expect(page.getByRole("link", { name: "Continue checkout" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    if (BILLING_CONFIGURED) {
+      await expect(page.getByRole("link", { name: "Continue checkout" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    } else {
+      await expectNoBillingActionsOffered(page);
+    }
   });
 
-  test("a COMPLETED attempt before the projection catches up shows Payment processing", async ({
+  test("a COMPLETED attempt before the projection catches up shows Payment processing when billing is configured, and the not-configured notice otherwise", async ({
     page,
   }) => {
     const email = await signUp(page);
@@ -136,11 +183,15 @@ test.describe("billing page states", () => {
 
     await page.goto("/app/billing");
 
-    await expect(page.getByText(/Payment processing/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    if (BILLING_CONFIGURED) {
+      await expect(page.getByText(/Payment processing/i)).toBeVisible();
+      await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    } else {
+      await expectNoBillingActionsOffered(page);
+    }
   });
 
-  test("a blocking-but-not-entitled subscription offers payment recovery, never Upgrade", async ({
+  test("a blocking-but-not-entitled subscription offers payment recovery when billing is configured, and the not-configured notice otherwise", async ({
     page,
   }) => {
     const email = await signUp(page);
@@ -156,8 +207,16 @@ test.describe("billing page states", () => {
 
     await page.goto("/app/billing");
 
-    await expect(page.getByText(/charge you twice/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    if (BILLING_CONFIGURED) {
+      await expect(page.getByText(/charge you twice/i)).toBeVisible();
+      await expect(page.getByRole("button", { name: "Update payment method" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    } else {
+      // Recovery is a billing action too: with nothing configured the page must
+      // not offer it either, and it must not imply a second charge is possible.
+      await expectNoBillingActionsOffered(page);
+      await expect(page.getByText(/charge you twice/i)).toHaveCount(0);
+    }
   });
 
   test("duplicate risk warns and never offers Upgrade", async ({ page }) => {
@@ -178,15 +237,24 @@ test.describe("billing page states", () => {
     await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
   });
 
-  test("an operator block refuses billing entirely", async ({ page }) => {
+  test("an operator block refuses billing entirely when billing is configured, and the not-configured notice otherwise", async ({
+    page,
+  }) => {
     const email = await signUp(page);
     const id = await userId(email);
     await upsertSubscription(id, { billingBlockedReason: "duplicate_customer" });
 
     await page.goto("/app/billing");
 
-    await expect(page.getByText(/manual review/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    if (BILLING_CONFIGURED) {
+      await expect(page.getByText(/manual review/i)).toBeVisible();
+      await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
+    } else {
+      // Both branches refuse billing; only the stated reason differs, and the
+      // unconfigured deployment has no account-specific review to offer.
+      await expectNoBillingActionsOffered(page);
+      await expect(page.getByText(/manual review/i)).toHaveCount(0);
+    }
   });
 
   test("the success redirect alone never grants PLUS", async ({ page }) => {
