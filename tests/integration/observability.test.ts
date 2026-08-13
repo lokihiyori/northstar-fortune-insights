@@ -1,6 +1,7 @@
 // @vitest-environment node
 import "dotenv/config";
 
+import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import Redis from "ioredis";
 
@@ -156,13 +157,73 @@ describe("readiness against real dependencies", () => {
 
   it("does not mutate application data", async () => {
     const { prisma } = await import("@/lib/db/prisma");
+    const { getRedis } = await import("@/lib/redis/client");
 
-    const before = await prisma.user.count();
-    await checkReadiness();
-    await checkReadiness();
-    const after = await prisma.user.count();
+    /*
+     * Owned by this test, not global.
+     *
+     * The previous version compared `prisma.user.count()` before and after.
+     * That number is global, and Vitest runs the integration files in parallel,
+     * so any other file creating or deleting a user moved it — measured at 299
+     * mismatches in 400 iterations against a concurrent writer, while readiness
+     * itself issued nothing but `SELECT 1`. The claim was right; the evidence
+     * was someone else's row.
+     *
+     * A sentinel this test creates cannot be touched by another file, so an
+     * inequality here can only mean readiness wrote something.
+     */
+    const email = `readiness-${randomUUID()}@northstar.test`;
+    const sentinel = await prisma.user.create({
+      data: { email, name: "Readiness Sentinel", role: "USER" },
+      select: { id: true },
+    });
 
-    expect(after).toBe(before);
+    // Readiness pings Redis too, so a key proves the cache probe is read-only
+    // in the same breath. Namespaced away from anything the app or the limiter
+    // reads, and deleted below.
+    const redis = getRedis();
+    const cacheKey = `northstar:test:readiness-sentinel:${sentinel.id}`;
+    const cacheValue = randomUUID();
+    if (redis) await redis.set(cacheKey, cacheValue, "EX", 120);
+
+    const readSentinel = () =>
+      prisma.user.findUnique({
+        where: { id: sentinel.id },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          emailVerified: true,
+          locale: true,
+          timezone: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+
+    try {
+      const before = await readSentinel();
+      const beforeScopedCount = await prisma.user.count({ where: { email } });
+
+      await checkReadiness();
+      await checkReadiness();
+
+      const after = await readSentinel();
+      const afterScopedCount = await prisma.user.count({ where: { email } });
+
+      // Still there, byte-identical in every column, and neither duplicated nor
+      // removed. A probe that wrote, deleted, or touched `updatedAt` fails here.
+      expect(after).not.toBeNull();
+      expect(after).toEqual(before);
+      expect(beforeScopedCount).toBe(1);
+      expect(afterScopedCount).toBe(1);
+
+      if (redis) expect(await redis.get(cacheKey)).toBe(cacheValue);
+    } finally {
+      if (redis) await redis.del(cacheKey);
+      await prisma.user.delete({ where: { id: sentinel.id } });
+    }
   });
 });
 
