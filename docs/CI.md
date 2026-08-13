@@ -23,6 +23,37 @@ faster feedback on a genuine database regression.
 The build is **not** repeated in `database-e2e`. Playwright starts `next dev` there (see below), so
 `pnpm build` runs exactly once, in `quality`.
 
+## Toolchain setup
+
+Both jobs set the toolchain up the same way, in this order:
+
+```yaml
+- uses: actions/checkout@v5
+- uses: pnpm/setup@v2
+  with:
+    install: false
+- uses: actions/setup-node@v5
+  with:
+    node-version-file: .nvmrc
+    cache: pnpm
+- name: Install dependencies
+  run: pnpm install --frozen-lockfile
+```
+
+- **`pnpm/setup@v2`** is the official successor to `pnpm/action-setup` for pnpm 11+. With no
+  `version` input it reads `packageManager` from `package.json` — `pnpm@11.20.0` — so the pnpm
+  version is declared once, in the repository, and never duplicated in the workflow. It fetches a
+  self-contained pnpm binary, so it does not need Node to run.
+- **`install: false` is deliberate.** The action installs dependencies by default. Letting it do so
+  would hide the install inside a setup step; the named `pnpm install --frozen-lockfile` below stays
+  the authoritative one, visible in the log and able to fail on its own when the lockfile is stale.
+  That failure is the point — it is what stops a lockfile that no longer matches `package.json`.
+- **`actions/setup-node@v5` is kept**, and `.nvmrc` remains the single Node-version source (Node
+  22). `pnpm/setup` can install a runtime itself, but no `runtime` input and no `devEngines.runtime`
+  are declared here; setup-node runs last, so the Node on `PATH` is the one `.nvmrc` asks for.
+- **Order matters.** `cache: pnpm` needs the pnpm binary to resolve the store path, so the pnpm
+  setup step must come before setup-node.
+
 ## Service containers
 
 ```yaml
@@ -84,16 +115,17 @@ helper, exactly as a real operator would, so CI never needs a pre-seeded elevate
 
 Every CI step has a local equivalent. With `pnpm db:up` running:
 
-| CI step                      | Local command                     |
-| ---------------------------- | --------------------------------- |
-| quality job, in full         | `pnpm verify`                     |
-| Dependency audit             | `pnpm audit:ci`                   |
-| Apply migrations             | `pnpm db:deploy`                  |
-| Verify migration status      | `pnpm exec prisma migrate status` |
-| Verify schema and extensions | `pnpm db:verify`                  |
-| Seed                         | `pnpm db:seed`                    |
-| Integration tests            | `pnpm test:integration`           |
-| End-to-end tests             | `pnpm test:e2e`                   |
+| CI step                          | Local command                     |
+| -------------------------------- | --------------------------------- |
+| quality job, in full             | `pnpm verify && pnpm audit:ci`    |
+| format, lint, types, unit, build | `pnpm verify`                     |
+| Dependency audit                 | `pnpm audit:ci`                   |
+| Apply migrations                 | `pnpm db:deploy`                  |
+| Verify migration status          | `pnpm exec prisma migrate status` |
+| Verify schema and extensions     | `pnpm db:verify`                  |
+| Seed                             | `pnpm db:seed`                    |
+| Integration tests                | `pnpm test:integration`           |
+| End-to-end tests                 | `pnpm test:e2e`                   |
 
 To reproduce CI's _starting_ state rather than your working database, point `DATABASE_URL` at a
 throwaway database and run steps 3–9 against it.

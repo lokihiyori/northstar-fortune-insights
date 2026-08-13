@@ -73,7 +73,10 @@ Directory boundaries (spec section 8): `src/app` routing only, `src/components` 
   source lifecycle changes.
 - Run `pnpm test:e2e` when a critical user flow changes.
 
-`pnpm verify` runs all of the above plus `build` in one pass.
+`pnpm verify` runs `format:check`, `lint`, `typecheck`, the unit tests and `build` in one pass. It
+does **not** run the dependency audit, the integration tests, or the end-to-end tests.
+`pnpm test:integration` and `pnpm test:e2e` are separate service-backed and flow checks — run them
+when the change touches what they cover, and expect CI to run them regardless.
 
 ## Authentication
 
