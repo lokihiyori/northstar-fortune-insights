@@ -233,7 +233,21 @@ test.describe("billing page states", () => {
 
     await page.goto("/app/billing");
 
-    await expect(page.getByRole("alert")).toContainText(/more than one live subscription/i);
+    /*
+     * Scoped to the warning itself.
+     *
+     * A bare `getByRole("alert")` also matches Next's route announcer — an
+     * empty `<div role="alert" id="__next-route-announcer__">` the client
+     * runtime injects — which resolved to two elements and tripped strict mode
+     * intermittently. Filtering by the warning's own text keeps the assertion
+     * on the product's alert and still fails if that alert stops rendering.
+     */
+    const duplicateWarning = page
+      .getByRole("alert")
+      .filter({ hasText: /more than one live subscription/i });
+
+    await expect(duplicateWarning).toBeVisible();
+    await expect(duplicateWarning).toContainText(/do not start another subscription/i);
     await expect(page.getByRole("button", { name: "Upgrade to Plus" })).toHaveCount(0);
   });
 
@@ -343,8 +357,14 @@ test.describe("demo isolation", () => {
     });
 
     // The developer account is not demo, so this is about the route existing
-    // and never redirecting off-site without a verified Session.
+    // and never redirecting off-site without a verified Session. The expected
+    // host comes from the configured base URL rather than a hard-coded
+    // `localhost:3000`, which silently became wrong on any other port.
     const location = response.headers()["location"] ?? "";
-    if (location) expect(location).toContain("localhost:3000");
+    if (location) {
+      const baseUrl = test.info().project.use.baseURL;
+      expect(baseUrl, "baseURL must be configured").toBeTruthy();
+      expect(location).toContain(new URL(baseUrl!).host);
+    }
   });
 });
