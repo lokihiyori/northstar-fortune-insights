@@ -55,11 +55,26 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # `pnpm/setup@v2` — the official successor to `pnpm/action-setup` for
+      # pnpm 11+, which is what `packageManager` pins. It fetches pnpm's
+      # self-contained binary, so it needs no Node of its own.
+      #
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary to resolve
-      # the store path. With no `version` input, this reads `packageManager`
-      # from package.json, so the repository declares its own pnpm version once.
-      - uses: pnpm/action-setup@v4
+      # the store path. With no `version` input it reads `packageManager` from
+      # package.json, so the repository still declares its pnpm version once.
+      #
+      # `install: false` because this action installs dependencies by default.
+      # The frozen-lockfile install below stays an explicit, named step: it must
+      # be visible in the log and must fail on its own when the lockfile is
+      # stale, which a side effect of the setup step could not do as clearly.
+      - uses: pnpm/setup@v2
+        with:
+          install: false
 
+      # Kept deliberately. `pnpm/setup` can install a runtime itself, but this
+      # repository keeps .nvmrc as the single Node-version source, and no
+      # `runtime` input or `devEngines.runtime` is declared. setup-node runs
+      # last, so the Node on PATH is the one .nvmrc asks for.
       - uses: actions/setup-node@v5
         with:
           # Read from .nvmrc so local and CI agree from a single file. It pins
@@ -163,7 +178,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      # Same setup as `quality` — see the comments there for why the order,
+      # `install: false`, and the separate frozen-lockfile step all matter.
+      - uses: pnpm/setup@v2
+        with:
+          install: false
 
       - uses: actions/setup-node@v5
         with:

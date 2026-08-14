@@ -140,7 +140,11 @@ It is off by default so a real database can never be seeded with an elevated acc
 | `pnpm db:generate`      | Regenerate the Prisma client                                 |
 | `pnpm db:studio`        | Prisma Studio                                                |
 
-Run `pnpm verify` before opening a pull request. CI runs the same checks.
+Run `pnpm verify` before opening a pull request. It runs format check, lint, typecheck, unit tests
+and build — **not** the dependency audit, the integration tests, or the end-to-end tests. CI runs
+those as well: `pnpm audit:ci` in the quality job, then the integration and Playwright suites
+against real PostgreSQL and Redis. Add `pnpm audit:ci` locally to match the quality job, and run
+`pnpm test:integration` and `pnpm test:e2e` when the change touches what they cover.
 
 ## Project structure
 
@@ -204,7 +208,10 @@ depends on them tightens them.
   rules out expiry or key deletion as the explanation, leaving only the generation bump. Deleting
   the `invalidateRetrievalCache()` call makes this test fail.
 
-- **Playwright** — `tests/e2e`. Starts its own server (`pnpm dev` locally, `pnpm start` in CI).
+- **Playwright** — `tests/e2e`. Starts its own server with `pnpm dev`, locally **and** in CI; see
+  [`docs/CI.md`](docs/CI.md) for why `pnpm start` cannot serve it. It never reuses an already
+  running server, so **port 3000 must be free before a local run** — otherwise the run stops
+  immediately rather than testing against a server configured differently from the suite.
   Run `pnpm test:e2e:install` once before the first run.
 
 `tests/e2e/auth-flows.spec.ts`, `tests/e2e/guidance.spec.ts`, and `tests/e2e/admin.spec.ts`

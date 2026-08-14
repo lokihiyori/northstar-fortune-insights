@@ -23,7 +23,7 @@ export const authConfig = {
   cookies: buildCookieOptions(isProduction),
   session: {
     // Forced by the credentials provider: Auth.js cannot issue a database
-    // session for it. See docs/adr/0006-authjs-beta-and-jwt-sessions.md.
+    // session for it. See docs/adr/0006-jwt-sessions-and-layered-authorization.md.
     strategy: "jwt",
     maxAge: 60 * 60 * 24 * 30,
   },
