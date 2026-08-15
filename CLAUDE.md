@@ -139,8 +139,12 @@ when the change touches what they cover, and expect CI to run them regardless.
 
 ## Security posture (Phase 8A)
 
-- **Environment validation runs at startup** in `src/instrumentation.ts` — the only boundary Next
-  guarantees completes before requests are served. Never move it into a layout or the proxy.
+- **Environment validation runs at startup**, from `register()` in `src/instrumentation.ts` — the
+  only boundary Next guarantees completes before requests are served. Never move it into a layout or
+  the proxy. The entry itself stays runtime-agnostic and delegates to `src/instrumentation-node.ts`
+  through a conditional dynamic import; Node-only code (the environment modules, the logger, Redis,
+  `process.exit`) must live there, because anything statically visible in the shared entry is
+  analysed against the Edge runtime even when a `NEXT_RUNTIME` guard stops it running.
 - Variables are tiered: always-required, production-runtime-only, all-or-nothing provider groups,
   and optional. Production checks are skipped during `next build` (`NEXT_PHASE`), so CI never needs
   runtime secrets.
@@ -193,7 +197,7 @@ when the change touches what they cover, and expect CI to run them regardless.
 
 - **`console` is not the logging interface.** Server code calls
   `src/lib/observability/logger`; `no-console` is an ESLint **error** outside the logger itself,
-  `instrumentation.ts`, the client error boundary, and test/seed tooling.
+  `instrumentation-node.ts`, the client error boundary, and test/seed tooling.
 - **Fields are allow-listed, never denied** (`observability/redact.ts`). Credential-shaped names are
   refused unconditionally, content-shaped names only survive with a measurement suffix (`reportId`,
   `chunkCount`), values must be primitives, and **objects are never walked**. Exceptions contribute

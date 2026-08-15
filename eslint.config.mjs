@@ -43,9 +43,10 @@ const eslintConfig = defineConfig([
      *
      * - the logger itself writes to stdout, because that is what a container
      *   platform and a log collector already capture;
-     * - `instrumentation.ts` prints a human-readable env failure before the
-     *   logger is worth loading, and that block is what an operator reads on
-     *   the first page of a failed boot;
+     * - `instrumentation-node.ts` prints a human-readable env failure before
+     *   the logger is worth loading, and that block is what an operator reads
+     *   on the first page of a failed boot (the shared `instrumentation.ts`
+     *   entry stays runtime-agnostic and writes nothing);
      * - the client error boundary runs in the browser, where a server-only
      *   logger cannot go;
      * - seed and test tooling legitimately report to a terminal.
@@ -61,7 +62,7 @@ const eslintConfig = defineConfig([
       "tests/**/*.tsx",
       "*.config.ts",
       "*.config.mts",
-      "src/instrumentation.ts",
+      "src/instrumentation-node.ts",
       "src/lib/observability/logger.ts",
       "src/app/app/error.tsx",
     ],
