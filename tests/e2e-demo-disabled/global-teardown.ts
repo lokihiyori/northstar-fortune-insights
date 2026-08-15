@@ -2,6 +2,7 @@ import Redis from "ioredis";
 
 import {
   DEMO_DISABLED_RUN_SECRET_ENV,
+  TEARDOWN_FATAL_PREFIX,
   demoDisabledAuthIdentifierKey,
 } from "./helpers/run-identity";
 import { RATE_LIMIT_POLICIES } from "@/lib/rate-limit/policies";
@@ -39,7 +40,18 @@ export default async function globalTeardown(): Promise<void> {
     return;
   }
 
+  /*
+   * Redis is configured, so the run *did* persist a bucket and the exact key is
+   * now mandatory. Derived before the client is created, so a configuration
+   * failure can never be mistaken for — or swallowed by — a connectivity one.
+   */
   const runSecret = process.env[DEMO_DISABLED_RUN_SECRET_ENV];
+  if (typeof runSecret !== "string" || runSecret.length === 0) {
+    throw new Error(
+      `${TEARDOWN_FATAL_PREFIX} ${DEMO_DISABLED_RUN_SECRET_ENV} must be a non-empty string when REDIS_URL is configured. Without it the run's key cannot be derived and the bucket would be left behind while this reported success.`,
+    );
+  }
+
   const key = demoDisabledAuthIdentifierKey(runSecret);
 
   const redis = new Redis(url, { maxRetriesPerRequest: 2, lazyConnect: true });
@@ -54,7 +66,7 @@ export default async function globalTeardown(): Promise<void> {
     if (remaining !== 0) {
       // The suite owns this key outright, so a survivor means the computation
       // or the deletion is wrong — worth failing the run over.
-      throw new Error(`demo-disabled teardown: ${policyId} key still present after delete`);
+      throw new Error(`${TEARDOWN_FATAL_PREFIX} ${policyId} key still present after delete`);
     }
 
     // Counts and the policy name only. The secret, the address, the digest, the
@@ -63,9 +75,14 @@ export default async function globalTeardown(): Promise<void> {
       `demo-disabled teardown: ${policyId} observed=${String(observed)} removed=${String(removed)} remaining=0`,
     );
   } catch (error) {
-    // A genuinely unreachable Redis leaves nothing behind to clean, and must not
-    // fail an otherwise green run. A key that survived deletion must.
-    if (error instanceof Error && error.message.includes("still present")) throw error;
+    /*
+     * A genuinely unreachable Redis leaves nothing behind to clean, and must not
+     * fail an otherwise green run. Everything this suite raises deliberately —
+     * a survivor after deletion, a missing run secret — carries the fatal prefix
+     * and is rethrown, so no deliberate failure can ever be reported as a
+     * connectivity blip.
+     */
+    if (error instanceof Error && error.message.startsWith(TEARDOWN_FATAL_PREFIX)) throw error;
     console.log(`demo-disabled teardown: cache unreachable, no ${policyId} key removed`);
   } finally {
     redis.disconnect();

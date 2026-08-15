@@ -28,6 +28,9 @@ export const DEMO_DISABLED_PROBE_EMAIL = "nobody-demo-disabled@northstar.test";
  */
 export const DEMO_DISABLED_RUN_SECRET_ENV = "NORTHSTAR_DEMO_DISABLED_RUN_SECRET";
 
+/** Marks the failures this suite must never swallow. See the teardown's catch. */
+export const TEARDOWN_FATAL_PREFIX = "demo-disabled teardown:";
+
 /**
  * The one exact key this run owns.
  *
@@ -43,8 +46,25 @@ export const DEMO_DISABLED_RUN_SECRET_ENV = "NORTHSTAR_DEMO_DISABLED_RUN_SECRET"
  * address. Only the `AUTH_IDENTIFIER` one is selected: it is the single bucket
  * the failed sign-in creates, and narrowing here keeps the teardown from
  * deleting a bucket the suite never wrote.
+ *
+ * **Fails closed on a missing secret.** `digestIdentifier` falls back to a known
+ * development salt when handed nothing, which is right for an app running
+ * without `AUTH_SECRET` and wrong here: the disabled server is *always* started
+ * with a freshly generated one. If the carrier variable ever went missing — a
+ * Playwright lifecycle change, a config edit — the fallback would quietly derive
+ * a *different* key, find it absent, report `observed=0 removed=0 remaining=0`,
+ * and leave the real bucket behind. A green run would then hide the exact
+ * regression this teardown exists to prevent. The guard lives here, not only in
+ * the teardown, so no other caller can route around it.
  */
 export function demoDisabledAuthIdentifierKey(runSecret: string | undefined): string {
+  if (typeof runSecret !== "string" || runSecret.length === 0) {
+    // Names the variable and the rule; never its value.
+    throw new Error(
+      `${TEARDOWN_FATAL_PREFIX} ${DEMO_DISABLED_RUN_SECRET_ENV} is missing or empty, so the run's exact rate-limit key cannot be derived. Refusing to fall back to the development digest salt, which would compute a different key and silently leave the real one behind.`,
+    );
+  }
+
   const authIdentifierPolicyId = RATE_LIMIT_POLICIES.AUTH_IDENTIFIER.id;
 
   const owned = demoRateLimitKeys({
