@@ -339,7 +339,9 @@ Recorded in [ADR 0007](docs/adr/0007-security-headers-and-env-validation.md).
 ### Environment validation
 
 `src/instrumentation.ts` validates the environment once, at server startup, before any request is
-served. Variables are graded rather than treated as one list:
+served — its `register()` delegates to `src/instrumentation-node.ts`, which holds the Node-only
+startup path so the shared entry stays safe to compile for the Edge runtime. Variables are graded
+rather than treated as one list:
 
 | Tier                          | Variables                                                               |
 | ----------------------------- | ----------------------------------------------------------------------- |
