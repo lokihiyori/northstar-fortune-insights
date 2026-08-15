@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { expect, test } from "@playwright/test";
 import { DEMO_DISABLED_ORIGIN } from "../e2e/helpers/ports";
+import { DEMO_DISABLED_PROBE_EMAIL } from "./helpers/run-identity";
 
 /**
  * Demo mode, switched off, proved in a browser against a real server.
@@ -103,7 +104,9 @@ test("with demo mode disabled, the normal sign-in path still works", async ({ pa
   // its own random AUTH_SECRET, so a session it minted would be meaningless to
   // the rest of the suite. The enabled-demo specs already cover authenticated
   // journeys end to end.
-  await page.getByLabel("Email").fill("nobody-demo-disabled@northstar.test");
+  // The shared constant, so the rate-limit bucket this creates is the exact one
+  // the global teardown computes and removes.
+  await page.getByLabel("Email").fill(DEMO_DISABLED_PROBE_EMAIL);
   await page.getByLabel("Password").fill("definitely-not-the-password");
   await page.getByRole("button", { name: "Sign in" }).click();
 

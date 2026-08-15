@@ -1,6 +1,20 @@
 import { randomBytes } from "node:crypto";
 import { defineConfig, devices } from "@playwright/test";
 import { DEMO_DISABLED_ORIGIN, DEMO_DISABLED_PORT } from "./tests/e2e/helpers/ports";
+import { DEMO_DISABLED_RUN_SECRET_ENV } from "./tests/e2e-demo-disabled/helpers/run-identity";
+
+/**
+ * The disabled server's `AUTH_SECRET`, minted once per run.
+ *
+ * Hoisted to module scope because the teardown needs it too: the rate-limit
+ * bucket the suite leaves behind is named by an HMAC under this value, so
+ * without it the exact key cannot be computed. Published below on a dedicated
+ * variable in *this* process only — never on `AUTH_SECRET`, which would shadow
+ * the developer's persistent value — and stripped back out of the server's own
+ * environment. It is never written to disk, logged, or committed.
+ */
+const runAuthSecret = randomBytes(32).toString("hex");
+process.env[DEMO_DISABLED_RUN_SECRET_ENV] = runAuthSecret;
 
 /*
  * The *test process* needs to know the demo credentials; the *server* must not.
@@ -64,14 +78,18 @@ function disabledServerEnv(): Record<string, string> {
     "DEMO_ACCOUNT_EMAIL",
     "DEMO_ACCOUNT_PASSWORD",
     "DEMO_ALLOW_IN_PRODUCTION",
+    // The teardown's copy of the run secret. The server already receives it as
+    // `AUTH_SECRET` below and has no use for a second name.
+    DEMO_DISABLED_RUN_SECRET_ENV,
   ]) {
     delete env[key];
   }
 
   // The subject of the test.
   env["DEMO_MODE_ENABLED"] = "false";
-  // Per-run, never committed.
-  env["AUTH_SECRET"] = randomBytes(32).toString("hex");
+  // Per-run, never committed. Shared with the teardown so it can compute the
+  // exact rate-limit key this run owns.
+  env["AUTH_SECRET"] = runAuthSecret;
   env["NEXT_PUBLIC_APP_URL"] = DEMO_DISABLED_ORIGIN;
 
   return Object.fromEntries(
@@ -81,6 +99,12 @@ function disabledServerEnv(): Record<string, string> {
 
 export default defineConfig({
   testDir: "./tests/e2e-demo-disabled",
+  /*
+   * Removes only the one rate-limit bucket this suite's failed sign-in creates.
+   * Deliberately not the main suite's teardown, which also deletes database rows
+   * and sweeps the whole rate-limit prefix — far broader than this suite owns.
+   */
+  globalTeardown: "./tests/e2e-demo-disabled/global-teardown.ts",
   fullyParallel: false,
   forbidOnly: !!process.env["CI"],
   // Deliberately zero: this proof must not be rescued by a retry.
