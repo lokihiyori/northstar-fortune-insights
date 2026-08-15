@@ -162,10 +162,21 @@ describe("production startup with invalid configuration", () => {
   /**
    * A real child process, because the property under test is the process
    * outcome. Stubbing `process.exit` would prove the call was made, not that a
-   * misconfigured production server actually dies — which is the contract in
+   * misconfigured production process actually dies — which is the contract in
    * ADR 0007.
+   *
+   * **Scope.** The harness invokes `registerNodeInstrumentation()` directly. It
+   * is not a Next server and opens no HTTP listener, so it proves that startup
+   * instrumentation did not complete and that the process exited non-zero — not
+   * that a real server never binds a port. Measured separately against
+   * `next start`: Next prints its own `Ready` line and can briefly bind the
+   * listener before instrumentation failure terminates the process, identically
+   * before and after this change. The operational conclusion is unaffected —
+   * invalid production configuration terminates the process non-zero and no
+   * misconfigured server survives — but deployment readiness must be taken from
+   * `/api/v1/ready`, never from stdout or a transient socket.
    */
-  it("exits non-zero, reports only variable names and rules, and never becomes ready", async () => {
+  it("exits non-zero, reports only variable names and rules, and never completes Node startup instrumentation", async () => {
     const harness = path.join(process.cwd(), "tests/unit/fixtures/production-startup-harness.ts");
 
     // Deliberately too short for the production rule, and deliberately
@@ -216,7 +227,8 @@ describe("production startup with invalid configuration", () => {
     //    development rethrow as 9, so this cannot pass by the wrong route.
     expect(result.code).toBe(1);
 
-    // 2. The startup never completed, so the server never became ready.
+    // 2. `registerNodeInstrumentation()` never returned successfully; the
+    //    harness completion marker must therefore be absent.
     expect(result.output).not.toContain("HARNESS_REACHED_READY");
 
     // 3. Sanitized diagnostics: variables named, rules stated.

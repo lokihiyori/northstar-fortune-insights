@@ -20,8 +20,15 @@ import { registerNodeInstrumentation } from "../../../src/instrumentation-node";
 async function main(): Promise<void> {
   await registerNodeInstrumentation();
 
-  // Only reachable when validation passed. The production case under test must
-  // never get here, so this marker makes a false pass loud rather than silent.
+  /*
+   * Only reachable when `registerNodeInstrumentation()` returned normally, so
+   * the production case under test must never get here and its absence makes a
+   * false pass loud rather than silent.
+   *
+   * The marker means "Node startup instrumentation completed" and nothing more.
+   * This harness is not a Next server: it opens no HTTP listener, so the marker
+   * says nothing about whether a real server would bind a port.
+   */
   console.log("HARNESS_REACHED_READY");
 }
 
