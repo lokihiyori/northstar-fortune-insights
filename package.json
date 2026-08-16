@@ -2,6 +2,7 @@
   "name": "northstar",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
   "description": "NorthStar Fortune Insights — explainable AI guidance for career and life decisions.",
   "engines": {
     "node": ">=20.11.0"
