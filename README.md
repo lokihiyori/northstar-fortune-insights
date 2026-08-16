@@ -9,6 +9,19 @@ assumptions and trade-offs it carries, and what to do next.
 It is decision support, not fortune-telling. It does not predict outcomes and does not replace
 licensed professional advice.
 
+## For reviewers
+
+A portfolio codebase, not a product: **it is not deployed and is not production-ready.**
+
+Deterministic adapters stand in for the paid services, so the complete core journey — sign up,
+onboard, ask a question, generate a cited insight, compare paths, build a plan — runs locally with
+no OpenAI key and no Stripe account.
+
+If you are here to read code rather than run it, the load-bearing parts are the guidance
+orchestration (`src/features/guidance/orchestrator.ts`), pgvector retrieval over a reviewed corpus,
+Redis cache invalidation and rate limiting, the observability boundary, the database-backed test
+suites, and a CI pipeline that runs against real PostgreSQL and Redis.
+
 > **Status: Phases 0–8G complete.** Phases 0–7 are verified against a live database; Phase 8 adds
 > security posture, rate limiting, observability, CI hardening verified by a real GitHub Actions
 > run, operations runbooks with a verified backup/restore drill, a measured accessibility and
@@ -295,8 +308,10 @@ pnpm db:seed
 ```
 
 That creates `admin@northstar.local` with the same development password as the seeded user
-(printed by the seed command). **These are local development credentials only** — they exist
-solely on a machine that has run the seed, and no credentials are committed to the repository.
+(printed by the seed command). **These are local development credentials only.** No production,
+third-party, or externally usable credential is committed. The deterministic seed credentials above
+_are_ committed on purpose — they are part of the documented setup, and they authenticate only
+against a database the developer created locally.
 
 To promote an existing account instead:
 
@@ -623,4 +638,8 @@ drive both the published ports and the connection strings from one place.
 
 ## License
 
-Private and unlicensed. All rights reserved.
+Copyright © 2026 Kaisheng Liu. All rights reserved.
+
+This repository is published for portfolio review. No open-source license is granted for copying,
+modifying, distributing, sublicensing, or using the code outside the rights provided by GitHub's
+Terms of Service.
