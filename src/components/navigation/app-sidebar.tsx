@@ -118,36 +118,6 @@ export function MobileBottomNav() {
         />
       ) : null}
 
-      {moreOpen ? (
-        <div
-          id="app-nav-more"
-          className="border-border bg-surface absolute right-0 bottom-full left-0 border-t"
-        >
-          <ul className="p-2">
-            {SECONDARY_MOBILE_NAV.map((item) => {
-              const active = isActive(pathname, item.href, "exact" in item ? item.exact : false);
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    onClick={closeMore}
-                    aria-current={active ? "page" : undefined}
-                    className={cn(
-                      "rounded-control flex min-h-11 items-center px-4 text-sm",
-                      active
-                        ? "bg-brand-teal/10 text-text-primary font-medium"
-                        : "text-text-secondary",
-                    )}
-                  >
-                    {item.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
-
       {/* `relative` so the bar paints above the dismiss layer and stays tappable. */}
       <ul className="relative flex">
         {PRIMARY_MOBILE_NAV.map((item) => {
@@ -184,9 +154,59 @@ export function MobileBottomNav() {
             )}
           >
             More
+            {/*
+             * The teal above is a colour-and-weight signal only. This puts the
+             * same fact in the accessible name — "More, current section" — so a
+             * screen-reader user on /app/profile is told where they are without
+             * expanding anything. `aria-current="page"` would be wrong here: the
+             * button does not navigate. That attribute stays on the real link.
+             */}
+            {secondaryActive ? <span className="sr-only">, current section</span> : null}
           </button>
         </li>
       </ul>
+
+      {/*
+       * After the trigger in the DOM, above it on screen.
+       *
+       * Sequential focus and screen-reader reading order both follow DOM order,
+       * not visual order. Rendering this before the bar put the revealed links
+       * seven stops *behind* the button that revealed them, so Tab left the nav
+       * entirely and a reader moving forward never met them.
+       *
+       * Kept mounted and toggled with the native `hidden` attribute rather than
+       * conditionally rendered, so `aria-controls` always resolves to a real
+       * element. `hidden` removes it from the tab order and the accessibility
+       * tree on its own — no `tabIndex` bookkeeping.
+       */}
+      <div
+        id="app-nav-more"
+        hidden={!moreOpen}
+        className="border-border bg-surface absolute right-0 bottom-full left-0 border-t"
+      >
+        <ul className="p-2">
+          {SECONDARY_MOBILE_NAV.map((item) => {
+            const active = isActive(pathname, item.href, "exact" in item ? item.exact : false);
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  onClick={closeMore}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "rounded-control flex min-h-11 items-center px-4 text-sm",
+                    active
+                      ? "bg-brand-teal/10 text-text-primary font-medium"
+                      : "text-text-secondary",
+                  )}
+                >
+                  {item.label}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </nav>
   );
 }
