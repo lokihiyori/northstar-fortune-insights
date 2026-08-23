@@ -77,7 +77,7 @@ export default async function PlanPage({ params }: { params: Promise<{ id: strin
                           }
                           className={
                             complete
-                              ? "border-brand-teal bg-brand-teal flex size-5 items-center justify-center rounded border text-xs text-white"
+                              ? "border-brand-teal bg-brand-teal text-on-brand flex size-5 items-center justify-center rounded border text-xs"
                               : "border-border hover:border-brand-teal flex size-5 items-center justify-center rounded border"
                           }
                         >

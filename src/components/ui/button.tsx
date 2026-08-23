@@ -13,7 +13,9 @@ const VARIANTS: Record<Variant, string> = {
   secondary:
     "border border-border bg-surface text-text-primary hover:bg-surface-raised active:bg-surface-raised",
   ghost: "text-text-secondary hover:bg-surface-raised hover:text-text-primary",
-  danger: "bg-danger text-white hover:brightness-110",
+  // `text-on-danger` for the same reason as `text-on-brand` above: the dark
+  // theme's danger is a light red, so white on it measured 2.30:1.
+  danger: "bg-danger text-on-danger hover:brightness-110",
 };
 
 const SIZES: Record<Size, string> = {

@@ -459,6 +459,314 @@ test.describe("authenticated", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Composited opacity — a defect class axe is structurally blind to
+// ---------------------------------------------------------------------------
+
+/**
+ * axe evaluates contrast from *declared* colour pairs. An ancestor `opacity`
+ * is never composited in, so dimming a container of readable text produces a
+ * real WCAG 1.4.3 failure that a green axe run cannot see.
+ *
+ * The compass context list did exactly that: `opacity-40` took
+ * `--ns-text-secondary` to roughly 1.6:1 against the surface whenever the user
+ * unchecked "Include my compass context". This asserts the composited value
+ * directly, which is the only way to catch it.
+ */
+test.describe("composited opacity", () => {
+  test("the compass context stays readable when excluded", async ({ page }) => {
+    await signUp(page, uniqueEmail("a11y-opacity"));
+
+    await page.goto("/app/ask");
+    await page.getByText("Education", { exact: true }).click();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page
+      .getByLabel("Your decision question")
+      .fill("Does excluding my compass context change what is sent?");
+    await page.getByRole("button", { name: "Continue" }).click();
+
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+      "What should we send with it?",
+    );
+
+    const context = page.locator("dl", { has: page.getByText("Region", { exact: true }) });
+    await expect(context).toBeVisible();
+
+    /** Every opacity from the element up to <body>, multiplied. */
+    const effectiveOpacity = () =>
+      context.evaluate((node: Element) => {
+        let value = 1;
+        let element: Element | null = node;
+        while (element && element !== document.body) {
+          value *= Number.parseFloat(getComputedStyle(element).opacity || "1");
+          element = element.parentElement;
+        }
+        return value;
+      });
+
+    const include = page.getByRole("checkbox", { name: /include my compass context/i });
+    await expect(include).toBeChecked();
+    expect(await effectiveOpacity()).toBe(1);
+
+    await include.uncheck();
+    await expect(include).not.toBeChecked();
+
+    // The state must still be distinguishable, just not by dimming the text.
+    await expect(page.getByText("Not sent with this question")).toBeVisible();
+    expect(await effectiveOpacity(), "the compass context is dimmed by a composited opacity").toBe(
+      1,
+    );
+
+    await analyzeBothThemes(page, "axe /app/ask compass context excluded");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mobile navigation — every destination must be reachable on a phone
+// ---------------------------------------------------------------------------
+
+/**
+ * The bottom bar rendered four of the six destinations and the sidebar that
+ * carries the other two is `hidden md:block`, so Compass and Plan had no mobile
+ * route at all. Desktop-only viewports cannot see that, which is why this block
+ * sets its own — and runs at the narrowest width the project supports as well
+ * as a typical one, because five controls in a row is a width-sensitive layout.
+ */
+
+/**
+ * The project's touch-target floor.
+ *
+ * **Not** WCAG 2.2 AA. 2.5.8 Target Size (Minimum) is 24x24 CSS pixels, with
+ * spacing exceptions. 44x44 is 2.5.5 Target Size (Enhanced), which is AAA, and
+ * matches the iOS guideline. This project adopts the stronger number, so the
+ * assertions below are a house rule and must not be described as AA.
+ */
+const MIN_TARGET = 44;
+
+/** 320 is the narrowest width the project supports; 390 is a common phone. */
+const MOBILE_WIDTHS = [320, 390] as const;
+
+/** See the note at its first use: engines differ on the separator. */
+const CURRENT_SECTION_NAME = /^More\s*,\s*current section$/;
+
+for (const width of MOBILE_WIDTHS) {
+  test.describe(`mobile navigation @${String(width)}px`, () => {
+    test.use({ viewport: { width, height: 844 }, hasTouch: true });
+
+    async function signUpAndFinishOnboarding(page: Page): Promise<void> {
+      await signUp(page, uniqueEmail("a11y-mobile"));
+      await page.getByLabel("Country, province, or city").fill("Halifax, Nova Scotia");
+      await page.getByRole("button", { name: "Save and continue" }).click();
+      await page.waitForURL(/step=2/);
+      for (let step = 0; step < 3; step += 1) {
+        await page.getByRole("button", { name: "Skip this step" }).click();
+      }
+      await page.waitForURL(/\/app$/);
+    }
+
+    test("Compass and Plan are reachable through the bottom bar", async ({ page }) => {
+      await signUpAndFinishOnboarding(page);
+
+      const nav = page.getByRole("navigation", { name: "Application" });
+      await expect(nav).toBeVisible();
+
+      const more = nav.getByRole("button", { name: /^More/ });
+      await expect(more).toHaveAttribute("aria-expanded", "false");
+      // Absent, not merely invisible: `toBeHidden` also passes on no match.
+      await expect(nav.getByRole("link", { name: "Compass" })).toHaveCount(0);
+
+      // The collapsed bar is the state every mobile user meets first.
+      await analyzeBothThemes(page, `axe /app mobile nav collapsed @${String(width)}`);
+
+      // Touch, not a synthetic click — this bar exists only on touch viewports.
+      await more.tap();
+      await expect(more).toHaveAttribute("aria-expanded", "true");
+
+      await analyzeBothThemes(page, `axe /app mobile nav expanded @${String(width)}`);
+
+      await nav.getByRole("link", { name: "Compass" }).tap();
+      await page.waitForURL(/\/app\/profile$/);
+
+      // It must close on navigation, or it covers the page it just opened.
+      await expect(nav.getByRole("button", { name: /^More/ })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+
+      await nav.getByRole("button", { name: /^More/ }).tap();
+      await nav.getByRole("link", { name: "Plan" }).tap();
+      await page.waitForURL(/\/app\/billing$/);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    });
+
+    test("the current route is still indicated when it sits behind More", async ({ page }) => {
+      await signUpAndFinishOnboarding(page);
+
+      const nav = page.getByRole("navigation", { name: "Application" });
+      await nav.getByRole("button", { name: /^More/ }).tap();
+      await nav.getByRole("link", { name: "Compass" }).tap();
+      await page.waitForURL(/\/app\/profile$/);
+
+      /*
+       * Programmatic, not colour: the accessible name carries the fact.
+       *
+       * Matched with a whitespace-tolerant pattern because engines disagree on
+       * separator insertion between a text node and an inline element. Measured:
+       * Chrome yields "More , current section", jsdom's dom-accessibility-api
+       * yields "More, current section". Both speak identically; asserting either
+       * literal would pass in one suite and fail in the other.
+       */
+      await expect(nav.getByRole("button", { name: CURRENT_SECTION_NAME })).toBeVisible();
+
+      await nav.getByRole("button", { name: /^More/ }).tap();
+      await expect(nav.getByRole("link", { name: "Compass" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+      await expect(nav.getByRole("link", { name: "Plan" })).not.toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+
+      // A primary destination still marks itself the same way, and the control
+      // drops the current-section suffix once the route moves out from under it.
+      await nav.getByRole("link", { name: "History" }).tap();
+      await page.waitForURL(/\/app\/history$/);
+      await expect(nav.getByRole("link", { name: "History" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+      await expect(nav.getByRole("button", { name: "More" })).toBeVisible();
+    });
+
+    test("Tab reaches Compass then Plan after opening, and Escape restores focus", async ({
+      page,
+    }) => {
+      await signUpAndFinishOnboarding(page);
+
+      const nav = page.getByRole("navigation", { name: "Application" });
+      const more = nav.getByRole("button", { name: /^More/ });
+
+      await more.focus();
+      await expect(more).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(more).toHaveAttribute("aria-expanded", "true");
+
+      /*
+       * H1. The panel is rendered after the trigger, so the revealed links are
+       * the next two stops. Rendered before it, Tab left the nav entirely and a
+       * screen reader moving forward never met them.
+       */
+      await page.keyboard.press("Tab");
+      await expect(nav.getByRole("link", { name: "Compass" })).toBeFocused();
+
+      await page.keyboard.press("Tab");
+      await expect(nav.getByRole("link", { name: "Plan" })).toBeFocused();
+
+      await page.keyboard.press("Escape");
+      await expect(more).toHaveAttribute("aria-expanded", "false");
+      // Focus must not be dropped onto <body> when the panel is hidden again.
+      await expect(more).toBeFocused();
+    });
+
+    test("Space also expands the disclosure", async ({ page }) => {
+      await signUpAndFinishOnboarding(page);
+
+      const more = page
+        .getByRole("navigation", { name: "Application" })
+        .getByRole("button", { name: /^More/ });
+
+      await more.focus();
+      await page.keyboard.press("Space");
+      await expect(more).toHaveAttribute("aria-expanded", "true");
+    });
+
+    test("every bottom-bar target meets the project 44px floor", async ({ page }) => {
+      await signUpAndFinishOnboarding(page);
+
+      const nav = page.getByRole("navigation", { name: "Application" });
+      const targets = nav.getByRole("link").or(nav.getByRole("button"));
+
+      const count = await targets.count();
+      expect(count).toBe(5);
+
+      for (let index = 0; index < count; index += 1) {
+        const target = targets.nth(index);
+        const name = await target.textContent();
+        const box = await target.boundingBox();
+
+        expect(box, `${name ?? "target"} has no box`).not.toBeNull();
+        expect(
+          box!.height,
+          `${name ?? "target"} is ${String(box!.height)}px tall`,
+        ).toBeGreaterThanOrEqual(MIN_TARGET);
+        expect(
+          box!.width,
+          `${name ?? "target"} is ${String(box!.width)}px wide`,
+        ).toBeGreaterThanOrEqual(MIN_TARGET);
+      }
+    });
+
+    test("labels do not wrap, clip, or scroll the bar sideways", async ({ page }) => {
+      await signUpAndFinishOnboarding(page);
+
+      const nav = page.getByRole("navigation", { name: "Application" });
+      const targets = nav.getByRole("link").or(nav.getByRole("button"));
+
+      const measured = await targets.evaluateAll((nodes) =>
+        nodes.map((node) => {
+          /*
+           * Line boxes of the visible label itself, via a Range over its own
+           * text node.
+           *
+           * Dividing the element's height by its line-height does not work
+           * here: these controls carry `min-h-11` (44px) and `py-3`, so an
+           * unwrapped 16px line reported as three. The Range measures the text,
+           * not the padded box. The first text node is deliberate — the More
+           * button also holds an absolutely positioned `sr-only` span whose
+           * rect would otherwise count as an extra line.
+           */
+          const textNode = Array.from(node.childNodes).find(
+            (child) => child.nodeType === Node.TEXT_NODE && (child.textContent ?? "").trim() !== "",
+          );
+
+          let lines = 1;
+          if (textNode) {
+            const range = document.createRange();
+            range.selectNodeContents(textNode);
+            lines = range.getClientRects().length;
+          }
+
+          return {
+            label: (textNode?.textContent ?? node.textContent ?? "").trim(),
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+            lines,
+          };
+        }),
+      );
+
+      for (const item of measured) {
+        expect(
+          item.scrollWidth,
+          `"${item.label}" is clipped: scrollWidth ${String(item.scrollWidth)} exceeds clientWidth ${String(item.clientWidth)}`,
+        ).toBeLessThanOrEqual(item.clientWidth);
+
+        expect(
+          item.lines,
+          `"${item.label}" wraps onto ${String(item.lines)} lines`,
+        ).toBeLessThanOrEqual(1);
+      }
+
+      // The document itself must never scroll sideways at a supported width.
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, "the page scrolls horizontally").toBeLessThanOrEqual(0);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Demo mode (Phase 8G) — new UI, so it goes through the same gate
 // ---------------------------------------------------------------------------
 

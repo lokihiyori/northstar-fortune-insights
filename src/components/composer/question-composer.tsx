@@ -258,39 +258,56 @@ export function QuestionComposer({
                 </span>
               </label>
 
-              <dl
+              {/*
+               * The excluded state is carried by a dashed border and an explicit
+               * status label, never by `opacity`.
+               *
+               * `opacity-40` on this list composited --ns-text-secondary down to
+               * roughly 1.6:1 against the surface — readable content, not a
+               * disabled control, so WCAG 1.4.3 applies in full. It is the same
+               * anti-pattern the step list above already avoids, and axe cannot
+               * see it: contrast is evaluated from declared colour pairs and an
+               * ancestor's opacity is never composited in.
+               */}
+              <div
                 className={cn(
-                  "mt-5 space-y-3 text-sm transition-opacity",
-                  includeProfile ? "opacity-100" : "opacity-40",
+                  "rounded-control mt-5 border p-4",
+                  includeProfile ? "border-border" : "border-border border-dashed",
                 )}
               >
-                {[
-                  ["Region", context.region],
-                  ["Stage", context.careerStage],
-                  ["Current role", context.currentRole],
-                  ["Goal", context.primaryGoal],
-                  ["Timeframe", context.timeframe],
-                ].map(([label, value]) => (
-                  <div key={label}>
-                    <dt className="text-text-secondary text-xs">{label}</dt>
-                    <dd className={value ? "" : "text-text-secondary italic"}>
-                      {value ?? "Not set"}
+                <p className="text-text-secondary text-xs font-medium tracking-wide uppercase">
+                  {includeProfile ? "Sent with your question" : "Not sent with this question"}
+                </p>
+
+                <dl className="mt-3 space-y-3 text-sm">
+                  {[
+                    ["Region", context.region],
+                    ["Stage", context.careerStage],
+                    ["Current role", context.currentRole],
+                    ["Goal", context.primaryGoal],
+                    ["Timeframe", context.timeframe],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <dt className="text-text-secondary text-xs">{label}</dt>
+                      <dd className={value ? "" : "text-text-secondary italic"}>
+                        {value ?? "Not set"}
+                      </dd>
+                    </div>
+                  ))}
+                  <div>
+                    <dt className="text-text-secondary text-xs">Constraints</dt>
+                    <dd className="mt-1 flex flex-wrap gap-1.5">
+                      {context.constraints.length === 0 ? (
+                        <span className="text-text-secondary italic">None recorded</span>
+                      ) : (
+                        context.constraints.map((constraint) => (
+                          <Badge key={constraint.id}>{constraint.label}</Badge>
+                        ))
+                      )}
                     </dd>
                   </div>
-                ))}
-                <div>
-                  <dt className="text-text-secondary text-xs">Constraints</dt>
-                  <dd className="mt-1 flex flex-wrap gap-1.5">
-                    {context.constraints.length === 0 ? (
-                      <span className="text-text-secondary italic">None recorded</span>
-                    ) : (
-                      context.constraints.map((constraint) => (
-                        <Badge key={constraint.id}>{constraint.label}</Badge>
-                      ))
-                    )}
-                  </dd>
-                </div>
-              </dl>
+                </dl>
+              </div>
             </div>
           </div>
         ) : null}
