@@ -47,12 +47,18 @@ describe("MobileBottomNav", () => {
     }
   });
 
-  it("starts collapsed and reports that state", () => {
+  it("starts collapsed and keeps the secondary links out of the accessibility tree", () => {
     render(<MobileBottomNav />);
 
     expect(moreButton()).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("link", { name: "Compass" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Plan" })).not.toBeInTheDocument();
+
+    /*
+     * Null from a role query, not absence from the DOM. The panel is
+     * permanently mounted so `aria-controls` always resolves; `hidden` is what
+     * removes it from the accessibility tree and the tab order.
+     */
+    expect(screen.queryByRole("link", { name: "Compass" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Plan" })).toBeNull();
   });
 
   it("exposes every remaining destination behind More", async () => {
@@ -85,7 +91,8 @@ describe("MobileBottomNav", () => {
     await user.click(screen.getByRole("link", { name: "Compass" }));
 
     expect(moreButton()).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("link", { name: "Compass" })).not.toBeInTheDocument();
+    // Hidden again, so it leaves the accessibility tree — it stays in the DOM.
+    expect(screen.queryByRole("link", { name: "Compass" })).toBeNull();
   });
 
   it("closes on Escape and returns focus to the control that opened it", async () => {
