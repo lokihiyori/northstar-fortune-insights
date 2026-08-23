@@ -459,6 +459,193 @@ test.describe("authenticated", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Composited opacity — a defect class axe is structurally blind to
+// ---------------------------------------------------------------------------
+
+/**
+ * axe evaluates contrast from *declared* colour pairs. An ancestor `opacity`
+ * is never composited in, so dimming a container of readable text produces a
+ * real WCAG 1.4.3 failure that a green axe run cannot see.
+ *
+ * The compass context list did exactly that: `opacity-40` took
+ * `--ns-text-secondary` to roughly 1.6:1 against the surface whenever the user
+ * unchecked "Include my compass context". This asserts the composited value
+ * directly, which is the only way to catch it.
+ */
+test.describe("composited opacity", () => {
+  test("the compass context stays readable when excluded", async ({ page }) => {
+    await signUp(page, uniqueEmail("a11y-opacity"));
+
+    await page.goto("/app/ask");
+    await page.getByText("Education", { exact: true }).click();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page
+      .getByLabel("Your decision question")
+      .fill("Does excluding my compass context change what is sent?");
+    await page.getByRole("button", { name: "Continue" }).click();
+
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+      "What should we send with it?",
+    );
+
+    const context = page.locator("dl", { has: page.getByText("Region", { exact: true }) });
+    await expect(context).toBeVisible();
+
+    /** Every opacity from the element up to <body>, multiplied. */
+    const effectiveOpacity = () =>
+      context.evaluate((node: Element) => {
+        let value = 1;
+        let element: Element | null = node;
+        while (element && element !== document.body) {
+          value *= Number.parseFloat(getComputedStyle(element).opacity || "1");
+          element = element.parentElement;
+        }
+        return value;
+      });
+
+    const include = page.getByRole("checkbox", { name: /include my compass context/i });
+    await expect(include).toBeChecked();
+    expect(await effectiveOpacity()).toBe(1);
+
+    await include.uncheck();
+    await expect(include).not.toBeChecked();
+
+    // The state must still be distinguishable, just not by dimming the text.
+    await expect(page.getByText("Not sent with this question")).toBeVisible();
+    expect(await effectiveOpacity(), "the compass context is dimmed by a composited opacity").toBe(
+      1,
+    );
+
+    await analyzeBothThemes(page, "axe /app/ask compass context excluded");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mobile navigation — every destination must be reachable on a phone
+// ---------------------------------------------------------------------------
+
+/**
+ * The bottom bar rendered four of the six destinations and the sidebar that
+ * carries the other two is `hidden md:block`, so Compass and Plan had no mobile
+ * route at all. Desktop-only viewports cannot see that, which is why this block
+ * sets its own.
+ */
+test.describe("mobile navigation", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  /** WCAG 2.2 target size (minimum), and the iOS guideline, agree on 44px. */
+  const MIN_TARGET = 44;
+
+  async function signUpAndFinishOnboarding(page: Page): Promise<void> {
+    await signUp(page, uniqueEmail("a11y-mobile"));
+    await page.getByLabel("Country, province, or city").fill("Halifax, Nova Scotia");
+    await page.getByRole("button", { name: "Save and continue" }).click();
+    await page.waitForURL(/step=2/);
+    for (let step = 0; step < 3; step += 1) {
+      await page.getByRole("button", { name: "Skip this step" }).click();
+    }
+    await page.waitForURL(/\/app$/);
+  }
+
+  test("Compass and Plan are reachable through the bottom bar", async ({ page }) => {
+    await signUpAndFinishOnboarding(page);
+
+    const nav = page.getByRole("navigation", { name: "Application" });
+    await expect(nav).toBeVisible();
+
+    const more = nav.getByRole("button", { name: "More" });
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await expect(nav.getByRole("link", { name: "Compass" })).toBeHidden();
+
+    // Touch, not a synthetic click — this bar exists only on touch viewports.
+    await more.tap();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+
+    await analyzeBothThemes(page, "axe /app mobile nav expanded");
+
+    await nav.getByRole("link", { name: "Compass" }).tap();
+    await page.waitForURL(/\/app\/profile$/);
+
+    // It must close on navigation, or it covers the page it just opened.
+    await expect(nav.getByRole("button", { name: "More" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+
+    await nav.getByRole("button", { name: "More" }).tap();
+    await nav.getByRole("link", { name: "Plan" }).tap();
+    await page.waitForURL(/\/app\/billing$/);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  });
+
+  test("the current route is still indicated when it sits behind More", async ({ page }) => {
+    await signUpAndFinishOnboarding(page);
+
+    const nav = page.getByRole("navigation", { name: "Application" });
+    await nav.getByRole("button", { name: "More" }).tap();
+    await nav.getByRole("link", { name: "Compass" }).tap();
+    await page.waitForURL(/\/app\/profile$/);
+
+    await nav.getByRole("button", { name: "More" }).tap();
+    await expect(nav.getByRole("link", { name: "Compass" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(nav.getByRole("link", { name: "Plan" })).not.toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    // A primary destination still marks itself the same way.
+    await nav.getByRole("link", { name: "History" }).tap();
+    await page.waitForURL(/\/app\/history$/);
+    await expect(nav.getByRole("link", { name: "History" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  test("More is keyboard operable and returns focus on Escape", async ({ page }) => {
+    await signUpAndFinishOnboarding(page);
+
+    const nav = page.getByRole("navigation", { name: "Application" });
+    const more = nav.getByRole("button", { name: "More" });
+
+    await more.focus();
+    await expect(more).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+
+    await page.keyboard.press("Escape");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    // Focus must not be dropped onto <body> when the panel is removed.
+    await expect(more).toBeFocused();
+  });
+
+  test("every bottom-bar target meets the minimum size", async ({ page }) => {
+    await signUpAndFinishOnboarding(page);
+
+    const nav = page.getByRole("navigation", { name: "Application" });
+    const targets = nav.getByRole("link").or(nav.getByRole("button"));
+
+    const count = await targets.count();
+    expect(count).toBe(5);
+
+    for (let index = 0; index < count; index += 1) {
+      const target = targets.nth(index);
+      const name = await target.textContent();
+      const box = await target.boundingBox();
+
+      expect(box, `${name ?? "target"} has no box`).not.toBeNull();
+      expect(
+        box!.height,
+        `${name ?? "target"} is ${String(box!.height)}px tall`,
+      ).toBeGreaterThanOrEqual(MIN_TARGET);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Demo mode (Phase 8G) — new UI, so it goes through the same gate
 // ---------------------------------------------------------------------------
 

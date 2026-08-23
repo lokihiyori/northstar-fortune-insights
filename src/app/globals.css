@@ -49,6 +49,12 @@
    * fail badly on the light *dark-mode* teal, which is why it is a token. */
   --ns-on-brand: #ffffff;
 
+  /* Same pairing, same reason, for --ns-danger. The `danger` button variant
+   * hard-coded `text-white`, which measures 5.64:1 here but only 2.30:1 on the
+   * dark theme's lighter red — the identical failure --ns-on-brand exists to
+   * prevent. It had no call site, so no test could ever have caught it. */
+  --ns-on-danger: #ffffff;
+
   /* Derived: the single low-opacity aurora glow permitted on backgrounds. */
   --ns-aurora-from: rgb(26 139 135 / 0.14);
   --ns-aurora-to: rgb(18 59 93 / 0.1);
@@ -75,6 +81,9 @@
    */
   --ns-on-brand: #07111f;
 
+  /* 8.22:1 on #ff8790, against 2.30:1 for white. */
+  --ns-on-danger: #07111f;
+
   --ns-aurora-from: rgb(83 210 200 / 0.16);
   --ns-aurora-to: rgb(128 185 216 / 0.1);
 }
@@ -92,6 +101,7 @@
   --color-success: var(--ns-success);
   --color-warning: var(--ns-warning);
   --color-danger: var(--ns-danger);
+  --color-on-danger: var(--ns-on-danger);
   --color-border: var(--ns-border);
 
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
