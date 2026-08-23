@@ -548,20 +548,31 @@ const MOBILE_WIDTHS = [320, 390] as const;
 /** See the note at its first use: engines differ on the separator. */
 const CURRENT_SECTION_NAME = /^More\s*,\s*current section$/;
 
+/**
+ * Shared so the width-parameterised layout checks and the single-run behaviour
+ * checks below build an identical starting state. Each call still creates its
+ * own disposable account — isolation is deliberate, and teardown reclaims them.
+ */
+async function signUpAndFinishOnboarding(page: Page): Promise<void> {
+  await signUp(page, uniqueEmail("a11y-mobile"));
+  await page.getByLabel("Country, province, or city").fill("Halifax, Nova Scotia");
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  await page.waitForURL(/step=2/);
+  for (let step = 0; step < 3; step += 1) {
+    await page.getByRole("button", { name: "Skip this step" }).click();
+  }
+  await page.waitForURL(/\/app$/);
+}
+
+/*
+ * Width-dependent only. Five controls in a row is a layout that can break with
+ * the viewport, so these run at the narrowest supported width and a typical
+ * one. Behaviour that cannot vary with width lives in the single-run block
+ * below rather than being executed twice for the same result.
+ */
 for (const width of MOBILE_WIDTHS) {
   test.describe(`mobile navigation @${String(width)}px`, () => {
     test.use({ viewport: { width, height: 844 }, hasTouch: true });
-
-    async function signUpAndFinishOnboarding(page: Page): Promise<void> {
-      await signUp(page, uniqueEmail("a11y-mobile"));
-      await page.getByLabel("Country, province, or city").fill("Halifax, Nova Scotia");
-      await page.getByRole("button", { name: "Save and continue" }).click();
-      await page.waitForURL(/step=2/);
-      for (let step = 0; step < 3; step += 1) {
-        await page.getByRole("button", { name: "Skip this step" }).click();
-      }
-      await page.waitForURL(/\/app$/);
-    }
 
     test("Compass and Plan are reachable through the bottom bar", async ({ page }) => {
       await signUpAndFinishOnboarding(page);
@@ -596,88 +607,6 @@ for (const width of MOBILE_WIDTHS) {
       await nav.getByRole("link", { name: "Plan" }).tap();
       await page.waitForURL(/\/app\/billing$/);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    });
-
-    test("the current route is still indicated when it sits behind More", async ({ page }) => {
-      await signUpAndFinishOnboarding(page);
-
-      const nav = page.getByRole("navigation", { name: "Application" });
-      await nav.getByRole("button", { name: /^More/ }).tap();
-      await nav.getByRole("link", { name: "Compass" }).tap();
-      await page.waitForURL(/\/app\/profile$/);
-
-      /*
-       * Programmatic, not colour: the accessible name carries the fact.
-       *
-       * Matched with a whitespace-tolerant pattern because engines disagree on
-       * separator insertion between a text node and an inline element. Measured:
-       * Chrome yields "More , current section", jsdom's dom-accessibility-api
-       * yields "More, current section". Both speak identically; asserting either
-       * literal would pass in one suite and fail in the other.
-       */
-      await expect(nav.getByRole("button", { name: CURRENT_SECTION_NAME })).toBeVisible();
-
-      await nav.getByRole("button", { name: /^More/ }).tap();
-      await expect(nav.getByRole("link", { name: "Compass" })).toHaveAttribute(
-        "aria-current",
-        "page",
-      );
-      await expect(nav.getByRole("link", { name: "Plan" })).not.toHaveAttribute(
-        "aria-current",
-        "page",
-      );
-
-      // A primary destination still marks itself the same way, and the control
-      // drops the current-section suffix once the route moves out from under it.
-      await nav.getByRole("link", { name: "History" }).tap();
-      await page.waitForURL(/\/app\/history$/);
-      await expect(nav.getByRole("link", { name: "History" })).toHaveAttribute(
-        "aria-current",
-        "page",
-      );
-      await expect(nav.getByRole("button", { name: "More" })).toBeVisible();
-    });
-
-    test("Tab reaches Compass then Plan after opening, and Escape restores focus", async ({
-      page,
-    }) => {
-      await signUpAndFinishOnboarding(page);
-
-      const nav = page.getByRole("navigation", { name: "Application" });
-      const more = nav.getByRole("button", { name: /^More/ });
-
-      await more.focus();
-      await expect(more).toBeFocused();
-      await page.keyboard.press("Enter");
-      await expect(more).toHaveAttribute("aria-expanded", "true");
-
-      /*
-       * H1. The panel is rendered after the trigger, so the revealed links are
-       * the next two stops. Rendered before it, Tab left the nav entirely and a
-       * screen reader moving forward never met them.
-       */
-      await page.keyboard.press("Tab");
-      await expect(nav.getByRole("link", { name: "Compass" })).toBeFocused();
-
-      await page.keyboard.press("Tab");
-      await expect(nav.getByRole("link", { name: "Plan" })).toBeFocused();
-
-      await page.keyboard.press("Escape");
-      await expect(more).toHaveAttribute("aria-expanded", "false");
-      // Focus must not be dropped onto <body> when the panel is hidden again.
-      await expect(more).toBeFocused();
-    });
-
-    test("Space also expands the disclosure", async ({ page }) => {
-      await signUpAndFinishOnboarding(page);
-
-      const more = page
-        .getByRole("navigation", { name: "Application" })
-        .getByRole("button", { name: /^More/ });
-
-      await more.focus();
-      await page.keyboard.press("Space");
-      await expect(more).toHaveAttribute("aria-expanded", "true");
     });
 
     test("every bottom-bar target meets the project 44px floor", async ({ page }) => {
@@ -729,7 +658,7 @@ for (const width of MOBILE_WIDTHS) {
             (child) => child.nodeType === Node.TEXT_NODE && (child.textContent ?? "").trim() !== "",
           );
 
-          let lines = 1;
+          let lines: number | null = null;
           if (textNode) {
             const range = document.createRange();
             range.selectNodeContents(textNode);
@@ -746,6 +675,16 @@ for (const width of MOBILE_WIDTHS) {
       );
 
       for (const item of measured) {
+        /*
+         * No silent fallback. A label wrapped in an element instead of left as
+         * a bare text node cannot be measured this way, and defaulting to one
+         * line would retire the check without anyone noticing.
+         */
+        expect(
+          item.lines,
+          `"${item.label}" exposes no bare text node, so its line count cannot be measured — the label markup changed and this assertion must be updated alongside it`,
+        ).not.toBeNull();
+
         expect(
           item.scrollWidth,
           `"${item.label}" is clipped: scrollWidth ${String(item.scrollWidth)} exceeds clientWidth ${String(item.clientWidth)}`,
@@ -765,6 +704,98 @@ for (const width of MOBILE_WIDTHS) {
     });
   });
 }
+
+/*
+ * Disclosure behaviour that cannot vary with viewport width: roving focus, key
+ * activation, and route indication are the same at 320 and 390. Running them
+ * once removes three duplicate sign-up journeys without dropping an assertion.
+ * The layout checks above still cover both widths.
+ */
+test.describe("mobile navigation behaviour", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test("the current route is still indicated when it sits behind More", async ({ page }) => {
+    await signUpAndFinishOnboarding(page);
+
+    const nav = page.getByRole("navigation", { name: "Application" });
+    await nav.getByRole("button", { name: /^More/ }).tap();
+    await nav.getByRole("link", { name: "Compass" }).tap();
+    await page.waitForURL(/\/app\/profile$/);
+
+    /*
+     * Programmatic, not colour: the accessible name carries the fact.
+     *
+     * Matched with a whitespace-tolerant pattern because engines disagree on
+     * separator insertion between a text node and an inline element. Measured:
+     * Chrome yields "More , current section", jsdom's dom-accessibility-api
+     * yields "More, current section". Both speak identically; asserting either
+     * literal would pass in one suite and fail in the other.
+     */
+    await expect(nav.getByRole("button", { name: CURRENT_SECTION_NAME })).toBeVisible();
+
+    await nav.getByRole("button", { name: /^More/ }).tap();
+    await expect(nav.getByRole("link", { name: "Compass" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(nav.getByRole("link", { name: "Plan" })).not.toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    // A primary destination still marks itself the same way, and the control
+    // drops the current-section suffix once the route moves out from under it.
+    await nav.getByRole("link", { name: "History" }).tap();
+    await page.waitForURL(/\/app\/history$/);
+    await expect(nav.getByRole("link", { name: "History" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(nav.getByRole("button", { name: "More" })).toBeVisible();
+  });
+
+  test("Tab reaches Compass then Plan after opening, and Escape restores focus", async ({
+    page,
+  }) => {
+    await signUpAndFinishOnboarding(page);
+
+    const nav = page.getByRole("navigation", { name: "Application" });
+    const more = nav.getByRole("button", { name: /^More/ });
+
+    await more.focus();
+    await expect(more).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+
+    /*
+     * H1. The panel is rendered after the trigger, so the revealed links are
+     * the next two stops. Rendered before it, Tab left the nav entirely and a
+     * screen reader moving forward never met them.
+     */
+    await page.keyboard.press("Tab");
+    await expect(nav.getByRole("link", { name: "Compass" })).toBeFocused();
+
+    await page.keyboard.press("Tab");
+    await expect(nav.getByRole("link", { name: "Plan" })).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    // Focus must not be dropped onto <body> when the panel is hidden again.
+    await expect(more).toBeFocused();
+  });
+
+  test("Space also expands the disclosure", async ({ page }) => {
+    await signUpAndFinishOnboarding(page);
+
+    const more = page
+      .getByRole("navigation", { name: "Application" })
+      .getByRole("button", { name: /^More/ });
+
+    await more.focus();
+    await page.keyboard.press("Space");
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Demo mode (Phase 8G) — new UI, so it goes through the same gate

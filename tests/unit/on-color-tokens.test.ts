@@ -59,16 +59,28 @@ function token(block: string, name: string): string {
 const LIGHT = declarationBlock(":root");
 const DARK = declarationBlock(".dark");
 
+type Theme = "light" | "dark";
+
+/** Resolved inside the test body, so no CSS ever reaches a test title. */
+const BLOCKS: Record<Theme, string> = { light: LIGHT, dark: DARK };
+
 /** WCAG 2.2 AA normal text. Both controls here render text below 18.66px. */
 const AA_NORMAL_TEXT = 4.5;
 
 describe("paired foreground tokens", () => {
+  /*
+   * Three parameters, three placeholders, and the CSS is looked up from the
+   * theme rather than passed in. Passing the block as a title parameter made
+   * every generated name a multi-line dump of `:root` or `.dark`, and pushed
+   * the background token out of the title entirely.
+   */
   it.each([
-    ["light", LIGHT, "ns-on-brand", "ns-brand-teal"],
-    ["dark", DARK, "ns-on-brand", "ns-brand-teal"],
-    ["light", LIGHT, "ns-on-danger", "ns-danger"],
-    ["dark", DARK, "ns-on-danger", "ns-danger"],
-  ])("%s: --%s meets AA on --%s", (theme, block, foreground, background) => {
+    ["light", "ns-on-brand", "ns-brand-teal"],
+    ["dark", "ns-on-brand", "ns-brand-teal"],
+    ["light", "ns-on-danger", "ns-danger"],
+    ["dark", "ns-on-danger", "ns-danger"],
+  ] as [Theme, string, string][])("%s: --%s meets AA on --%s", (theme, foreground, background) => {
+    const block = BLOCKS[theme];
     const fg = token(block, foreground);
     const bg = token(block, background);
     const ratio = contrast(fg, bg);
@@ -94,11 +106,18 @@ describe("paired foreground tokens", () => {
   });
 });
 
-function tsxFiles(dir: string): string[] {
+/**
+ * Every `.ts` and `.tsx` under `src`, and nothing outside it.
+ *
+ * `.tsx` alone was too narrow: the `VARIANTS` record in `button.tsx` is exactly
+ * the kind of class-string map that gets extracted to a plain `.ts` module, and
+ * the scan would have stopped seeing it the moment it moved.
+ */
+function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) return tsxFiles(full);
-    return full.endsWith(".tsx") ? [full] : [];
+    if (statSync(full).isDirectory()) return sourceFiles(full);
+    return full.endsWith(".ts") || full.endsWith(".tsx") ? [full] : [];
   });
 }
 
@@ -111,8 +130,16 @@ describe("branded surfaces never hard-code a foreground", () => {
    */
   it("pairs no brand or danger background with text-white", () => {
     const offenders: string[] = [];
+    const scanned = sourceFiles(SRC);
 
-    for (const file of tsxFiles(SRC)) {
+    // A scan that silently found nothing to read would pass forever.
+    expect(scanned.length, "no source files were scanned").toBeGreaterThan(0);
+    expect(
+      scanned.some((file) => file.endsWith(".ts") && !file.endsWith(".tsx")),
+      "the scan reached no plain .ts module, so a variant moved out of .tsx would escape it",
+    ).toBe(true);
+
+    for (const file of scanned) {
       const lines = readFileSync(file, "utf8").split("\n");
 
       lines.forEach((line, index) => {
