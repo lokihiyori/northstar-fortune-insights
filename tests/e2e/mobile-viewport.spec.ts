@@ -21,11 +21,33 @@ import { TEST_PASSWORD, promoteToAdmin, uniqueEmail } from "./helpers/db";
  * closes it by asserting the declarations themselves.
  */
 
-/** Test-only. Production reads the device values and defaults to zero. */
-const INSETS = { top: 47, right: 44, bottom: 34, left: 44 } as const;
-const NO_INSETS = { top: 0, right: 0, bottom: 0, left: 0 } as const;
-
 type Insets = { top: number; right: number; bottom: number; left: number };
+
+/**
+ * **Stress profile — not a real device.**
+ *
+ * Every edge inset at once, including both inline edges on a narrow portrait
+ * viewport. No shipping phone reports that: WebKit gives a portrait device
+ * `left`/`right` of 0, and inline insets only appear in landscape, where the
+ * viewport is far wider. It is kept because it is the harshest arrangement the
+ * layout can be asked to survive, and it must never be read as representative.
+ * The representative profiles below are the ones that describe real hardware.
+ */
+const STRESS_INSETS: Insets = { top: 47, right: 44, bottom: 34, left: 44 };
+
+const NO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
+
+/**
+ * **Representative profiles**, from WebKit's actual behaviour on notched
+ * iPhones.
+ *
+ * Portrait: the sensor housing is at the top and the home indicator at the
+ * bottom; both inline edges report 0. Landscape: the housing moves to one side,
+ * so the inline insets appear, the top inset disappears, and the bottom
+ * indicator shrinks. These, not the stress profile, are what users meet.
+ */
+const PORTRAIT_INSETS: Insets = { top: 59, right: 0, bottom: 34, left: 0 };
+const LANDSCAPE_INSETS: Insets = { top: 0, right: 59, bottom: 21, left: 59 };
 
 const VIEWPORTS = [
   { label: "portrait 390", width: 390, height: 844 },
@@ -212,14 +234,14 @@ for (const viewport of VIEWPORTS) {
 
       for (const scheme of ["light", "dark"] as const) {
         await applyTheme(page, scheme);
-        await applyInsets(page, INSETS);
+        await applyInsets(page, STRESS_INSETS);
 
         const header = page.getByRole("banner");
         // The header's surface still spans the display; its content does not.
         await expectWithinSafeArea(
           page.getByRole("link", { name: /NorthStar/ }).first(),
           `logo ${scheme}`,
-          INSETS,
+          STRESS_INSETS,
           {
             inline: true,
             top: true,
@@ -228,7 +250,7 @@ for (const viewport of VIEWPORTS) {
         await expectWithinSafeArea(
           page.getByRole("button", { name: /colour theme|color theme/i }),
           `theme toggle ${scheme}`,
-          INSETS,
+          STRESS_INSETS,
           { inline: true, top: true },
         );
         await expectSpansViewportWidth(header, `marketing header ${scheme}`);
@@ -248,13 +270,13 @@ for (const viewport of VIEWPORTS) {
         await expectWithinSafeArea(
           footer.getByText(/Built in Canada/),
           `footer last row ${scheme}`,
-          INSETS,
+          STRESS_INSETS,
           { inline: true, bottom: true },
         );
         await expectWithinSafeArea(
           footer.getByRole("link", { name: "Privacy" }),
           `footer link ${scheme}`,
-          INSETS,
+          STRESS_INSETS,
         );
         await expectSpansViewportWidth(footer, `marketing footer ${scheme}`);
 
@@ -268,7 +290,7 @@ for (const viewport of VIEWPORTS) {
     if (viewport.width < 768) {
       test("marketing mobile menu clears the inline and top edges", async ({ page }) => {
         await page.goto("/pricing");
-        await applyInsets(page, INSETS);
+        await applyInsets(page, STRESS_INSETS);
 
         await page.getByRole("button", { name: /open menu/i }).click();
         const menu = page.getByRole("navigation", { name: "Primary mobile" });
@@ -276,7 +298,7 @@ for (const viewport of VIEWPORTS) {
         await expectWithinSafeArea(
           menu.getByRole("link", { name: "Pricing" }),
           "menu link",
-          INSETS,
+          STRESS_INSETS,
         );
         await expectNoHorizontalOverflow(page);
       });
@@ -284,7 +306,7 @@ for (const viewport of VIEWPORTS) {
 
     test("skip link focus UI clears the top and inline edges", async ({ page }) => {
       await page.goto("/pricing");
-      await applyInsets(page, INSETS);
+      await applyInsets(page, STRESS_INSETS);
 
       await page.keyboard.press("Tab");
       const skip = page.getByRole("link", { name: /skip to content/i });
@@ -294,27 +316,27 @@ for (const viewport of VIEWPORTS) {
        * The focus ring is drawn outside the border box, so the element itself
        * must clear the inset by more than zero for the ring to stay visible.
        */
-      await expectWithinSafeArea(skip, "skip link", INSETS, { inline: true, top: true });
+      await expectWithinSafeArea(skip, "skip link", STRESS_INSETS, { inline: true, top: true });
     });
 
     test("auth shell clears every edge", async ({ page }) => {
       await page.goto("/sign-in");
-      await applyInsets(page, INSETS);
+      await applyInsets(page, STRESS_INSETS);
 
-      await expectWithinSafeArea(page.getByRole("banner"), "auth header", INSETS, {
+      await expectWithinSafeArea(page.getByRole("banner"), "auth header", STRESS_INSETS, {
         inline: false,
       });
       await expectWithinSafeArea(
         page.getByRole("button", { name: /colour theme|color theme/i }),
         "auth theme toggle",
-        INSETS,
+        STRESS_INSETS,
         { inline: true, top: true },
       );
-      await expectWithinSafeArea(page.getByLabel("Email"), "email field", INSETS);
+      await expectWithinSafeArea(page.getByLabel("Email"), "email field", STRESS_INSETS);
       await expectWithinSafeArea(
         page.getByRole("button", { name: "Sign in" }),
         "sign-in button",
-        INSETS,
+        STRESS_INSETS,
       );
       await expectNoHorizontalOverflow(page);
     });
@@ -323,7 +345,7 @@ for (const viewport of VIEWPORTS) {
       page,
     }) => {
       await signUpAndFinishOnboarding(page);
-      await applyInsets(page, INSETS);
+      await applyInsets(page, STRESS_INSETS);
       // Top-edge geometry is only meaningful from an unscrolled viewport.
       await scrollTo(page, "top");
 
@@ -340,10 +362,14 @@ for (const viewport of VIEWPORTS) {
       await expectWithinSafeArea(
         page.getByRole("button", { name: "Sign out" }),
         "sign out",
-        INSETS,
+        STRESS_INSETS,
         { inline: headerRowFits, top: true },
       );
-      await expectWithinSafeArea(page.getByRole("heading", { level: 1 }), "dashboard h1", INSETS);
+      await expectWithinSafeArea(
+        page.getByRole("heading", { level: 1 }),
+        "dashboard h1",
+        STRESS_INSETS,
+      );
 
       const nav = page.getByRole("navigation", { name: "Application" });
       const belowMd = viewport.width < 768;
@@ -351,7 +377,7 @@ for (const viewport of VIEWPORTS) {
       if (belowMd) {
         // The bar owns the bottom edge here, and `<main>` must not also pad it.
         expect(await nav.evaluate((node) => getComputedStyle(node).paddingBottom)).toBe(
-          `${String(INSETS.bottom)}px`,
+          `${String(STRESS_INSETS.bottom)}px`,
         );
         expect(
           await page.getByRole("main").evaluate((node) => getComputedStyle(node).paddingBottom),
@@ -367,14 +393,14 @@ for (const viewport of VIEWPORTS) {
           .getByRole("main")
           .evaluate((node) => getComputedStyle(node).paddingBottom);
         // `max(2rem, inset)` — the base is the floor, never additive.
-        expect(mainPadding).toBe(`${String(Math.max(32, INSETS.bottom))}px`);
+        expect(mainPadding).toBe(`${String(Math.max(32, STRESS_INSETS.bottom))}px`);
         expect(await nav.evaluate((node) => getComputedStyle(node).paddingLeft)).toBe(
-          `${String(INSETS.left)}px`,
+          `${String(STRESS_INSETS.left)}px`,
         );
         await expectWithinSafeArea(
           nav.getByRole("link", { name: "Dashboard" }),
           "sidebar link",
-          INSETS,
+          STRESS_INSETS,
         );
       }
 
@@ -391,7 +417,7 @@ for (const viewport of VIEWPORTS) {
     if (viewport.width < 768) {
       test("bottom bar geometry survives the inset", async ({ page }) => {
         await signUpAndFinishOnboarding(page);
-        await applyInsets(page, INSETS);
+        await applyInsets(page, STRESS_INSETS);
 
         const nav = page.getByRole("navigation", { name: "Application" });
         const navBox = (await nav.boundingBox())!;
@@ -409,7 +435,7 @@ for (const viewport of VIEWPORTS) {
           expect(
             Math.round(navBox.y + navBox.height - (box.y + box.height)),
             `${label} intrudes into the safe-area strip`,
-          ).toBeGreaterThanOrEqual(INSETS.bottom);
+          ).toBeGreaterThanOrEqual(STRESS_INSETS.bottom);
         }
 
         await nav.getByRole("button", { name: /^More/ }).tap();
@@ -439,7 +465,7 @@ for (const viewport of VIEWPORTS) {
 
       await page.goto("/admin");
       await expect(page).toHaveURL(/\/admin$/);
-      await applyInsets(page, INSETS);
+      await applyInsets(page, STRESS_INSETS);
 
       await scrollTo(page, "top");
 
@@ -456,24 +482,24 @@ for (const viewport of VIEWPORTS) {
       await expectWithinSafeArea(
         page.getByRole("button", { name: "Sign out" }),
         "admin sign out",
-        INSETS,
+        STRESS_INSETS,
         { inline: inlineFits, top: true },
       );
       await expectWithinSafeArea(
         page.getByRole("navigation", { name: "Admin" }).getByRole("link", { name: "Sources" }),
         "admin nav link",
-        INSETS,
+        STRESS_INSETS,
         { inline: inlineFits },
       );
       await expectWithinSafeArea(
         page.getByRole("heading", { name: "Operations" }),
         "admin heading",
-        INSETS,
+        STRESS_INSETS,
         { inline: inlineFits },
       );
       expect(
         await page.getByRole("main").evaluate((node) => getComputedStyle(node).paddingBottom),
-      ).toBe(`${String(Math.max(32, INSETS.bottom))}px`);
+      ).toBe(`${String(Math.max(32, STRESS_INSETS.bottom))}px`);
 
       if (inlineFits) await expectNoHorizontalOverflow(page);
     });
@@ -504,6 +530,239 @@ for (const viewport of VIEWPORTS) {
           .getByRole("contentinfo")
           .evaluate((node) => getComputedStyle(node).paddingBottom),
       ).toBe("0px");
+      await expectNoHorizontalOverflow(page);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// A5 — representative device profiles
+// ---------------------------------------------------------------------------
+
+/**
+ * What real hardware actually reports, as opposed to the stress arrangement
+ * above.
+ *
+ * The stress profile applies both inline insets on a 320px portrait viewport,
+ * which no device produces, and the assertions there are scoped around that
+ * impossibility. Nothing here is scoped: every profile below is reachable, so
+ * every assertion runs unconditionally — including horizontal overflow, which
+ * is the one the stress block has to exempt.
+ *
+ * Journeys are kept to one authenticated session per profile. The marketing and
+ * zero-inset checks need no account at all.
+ */
+
+/**
+ * Clears the simulated properties instead of setting them to zero, so the value
+ * falls back to the production `env()` declaration. A headless Chrome reports no
+ * cutout, so `0px` here is the real computed result of the shipped CSS rather
+ * than another injected number — which is the one thing an override cannot
+ * otherwise demonstrate at runtime.
+ */
+async function resetInsets(page: Page): Promise<void> {
+  const computed = await page.evaluate(() => {
+    const style = document.documentElement.style;
+    for (const edge of ["top", "right", "bottom", "left"]) {
+      style.removeProperty(`--ns-safe-area-${edge}`);
+    }
+    const root = getComputedStyle(document.documentElement);
+    return ["top", "right", "bottom", "left"].map((edge) =>
+      root.getPropertyValue(`--ns-safe-area-${edge}`).trim(),
+    );
+  });
+
+  // Every edge must fall back to the zero default, not linger at a test value.
+  expect(computed, "a simulated inset survived the reset").toEqual(["0px", "0px", "0px", "0px"]);
+}
+
+const REPRESENTATIVE = [
+  {
+    label: "portrait 390",
+    width: 390,
+    height: 844,
+    insets: PORTRAIT_INSETS,
+    orientation: "portrait",
+  },
+  {
+    label: "narrow portrait 320",
+    width: 320,
+    height: 844,
+    insets: PORTRAIT_INSETS,
+    orientation: "portrait",
+  },
+  {
+    label: "landscape 844",
+    width: 844,
+    height: 390,
+    insets: LANDSCAPE_INSETS,
+    orientation: "landscape",
+  },
+] as const;
+
+for (const profile of REPRESENTATIVE) {
+  test.describe(`representative — ${profile.label}`, () => {
+    test.use({
+      viewport: { width: profile.width, height: profile.height },
+      hasTouch: true,
+    });
+
+    const { insets } = profile;
+    const isPortrait = profile.orientation === "portrait";
+
+    test("marketing shell clears every edge, then returns to base geometry", async ({ page }) => {
+      await page.goto("/pricing");
+      await applyInsets(page, insets);
+
+      await scrollTo(page, "top");
+      await expectWithinSafeArea(
+        page.getByRole("link", { name: /NorthStar/ }).first(),
+        "logo",
+        insets,
+        { inline: true, top: true },
+      );
+      await expectWithinSafeArea(
+        page.getByRole("button", { name: /colour theme|color theme/i }),
+        "theme toggle",
+        insets,
+        { inline: true, top: true },
+      );
+      await expectSpansViewportWidth(page.getByRole("banner"), "marketing header");
+      await expectBodyCoversViewport(page);
+
+      // The footer's last row is the content actually at risk from the indicator.
+      await scrollTo(page, "bottom");
+      const footer = page.getByRole("contentinfo");
+      await expectWithinSafeArea(footer.getByText(/Built in Canada/), "footer last row", insets, {
+        inline: true,
+        bottom: true,
+      });
+      await expectSpansViewportWidth(footer, "marketing footer");
+
+      // Unconditional: a reachable profile must never scroll the page sideways.
+      await expectNoHorizontalOverflow(page);
+
+      // Same page, insets removed: geometry must return to the pre-safe-area base.
+      await resetInsets(page);
+      await scrollTo(page, "top");
+      const gutter = profile.width >= 640 ? "32px" : "20px";
+      const zero = await page.evaluate(() => {
+        const header = document.querySelector("header")!;
+        const container = header.querySelector("div")!;
+        return {
+          headerTop: getComputedStyle(header).paddingTop,
+          left: getComputedStyle(container).paddingLeft,
+          right: getComputedStyle(container).paddingRight,
+          footerBottom: getComputedStyle(document.querySelector("footer")!).paddingBottom,
+        };
+      });
+      expect(zero).toEqual({
+        headerTop: "0px",
+        left: gutter,
+        right: gutter,
+        footerBottom: "0px",
+      });
+      await expectNoHorizontalOverflow(page);
+    });
+
+    test("app shell fits, and the bottom inset is applied exactly once", async ({ page }) => {
+      await signUpAndFinishOnboarding(page, "viewport-real");
+      await applyInsets(page, insets);
+      await scrollTo(page, "top");
+
+      // Unconditional on a reachable profile — no `headerRowFits` escape hatch.
+      await expectWithinSafeArea(
+        page.getByRole("button", { name: "Sign out" }),
+        "app sign out",
+        insets,
+        { inline: true, top: true },
+      );
+      await expectWithinSafeArea(page.getByRole("heading", { level: 1 }), "dashboard h1", insets, {
+        inline: true,
+      });
+
+      const nav = page.getByRole("navigation", { name: "Application" });
+      const bar = page.locator("nav.sticky");
+      const main = page.getByRole("main");
+
+      if (isPortrait) {
+        // Below `md` the bar exists and owns the bottom edge on its own.
+        await expect(bar).toBeVisible();
+        expect(
+          await bar.evaluate((node) => getComputedStyle(node).paddingBottom),
+          "the bar does not carry the bottom inset",
+        ).toBe(`${String(insets.bottom)}px`);
+        expect(
+          await main.evaluate((node) => getComputedStyle(node).paddingBottom),
+          "main took the bottom inset as well, applying it twice",
+        ).toBe("32px");
+        await expectSpansViewportWidth(bar, "bottom bar");
+
+        // Controls keep their own box above the non-interactive strip.
+        const targets = nav.getByRole("link").or(nav.getByRole("button"));
+        expect(await targets.count()).toBe(5);
+        const barBox = (await bar.boundingBox())!;
+        for (let index = 0; index < 5; index += 1) {
+          const target = targets.nth(index);
+          const label = (await target.textContent())?.trim() ?? "target";
+          const box = (await target.boundingBox())!;
+          expect(box.height, `${label} is ${String(box.height)}px tall`).toBeGreaterThanOrEqual(44);
+          expect(box.width, `${label} is ${String(box.width)}px wide`).toBeGreaterThanOrEqual(44);
+          expect(
+            Math.round(barBox.y + barBox.height - (box.y + box.height)),
+            `${label} intrudes into the safe-area strip`,
+          ).toBeGreaterThanOrEqual(insets.bottom);
+        }
+
+        await nav.getByRole("button", { name: /^More/ }).tap();
+        const panel = page.locator("#app-nav-more");
+        await expect(panel).toBeVisible();
+        const panelBox = (await panel.boundingBox())!;
+        expect(
+          Math.round(panelBox.y + panelBox.height),
+          "the panel overlaps the bar or its safe-area strip",
+        ).toBeLessThanOrEqual(Math.round(barBox.y) + TOLERANCE);
+      } else {
+        /*
+         * A landscape phone is 844px wide, which clears `md`. The bar must not
+         * render at all there — which is precisely why it needs no inline inset
+         * and the sidebar carries the left edge instead.
+         */
+        await expect(bar).toBeHidden();
+        expect(
+          await bar.evaluate((node) => getComputedStyle(node).display),
+          "the mobile bar renders above the md breakpoint",
+        ).toBe("none");
+        expect(
+          await nav.evaluate((node) => getComputedStyle(node).paddingLeft),
+          "the sidebar does not carry the left inset",
+        ).toBe(`${String(insets.left)}px`);
+        expect(
+          await main.evaluate((node) => getComputedStyle(node).paddingBottom),
+          "main does not own the bottom edge once the bar is gone",
+        ).toBe(`${String(Math.max(32, insets.bottom))}px`);
+
+        await expectWithinSafeArea(
+          nav.getByRole("link", { name: "Dashboard" }),
+          "sidebar link",
+          insets,
+          { inline: true },
+        );
+        await expectWithinSafeArea(
+          nav.getByRole("link", { name: "Plan" }),
+          "sidebar last link",
+          insets,
+          { inline: true },
+        );
+      }
+
+      await expectNoHorizontalOverflow(page);
+
+      await resetInsets(page);
+      expect(
+        await main.evaluate((node) => getComputedStyle(node).paddingBottom),
+        "main did not return to its base bottom padding",
+      ).toBe("32px");
       await expectNoHorizontalOverflow(page);
     });
   });
