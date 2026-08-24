@@ -60,19 +60,26 @@
   --ns-aurora-to: rgb(18 59 93 / 0.1);
 
   /*
-   * The device's bottom safe-area inset — the home-indicator strip on a notched
-   * phone — defaulting to 0 everywhere else. Non-zero only when the document
-   * opts in with `viewport-fit=cover`, which `src/app/layout.tsx` does.
+   * The device's safe-area insets — the notch, the rounded corners, and the
+   * home-indicator strip — each defaulting to 0 where there is none.
    *
-   * Read through a custom property rather than calling `env()` at the point of
+   * All four are non-zero only because `src/app/layout.tsx` declares
+   * `viewport-fit=cover`. That opt-in is global: it extends *every* route to the
+   * physical edges, so every content-bearing edge has to be accounted for, not
+   * just the app's bottom bar.
+   *
+   * Read through custom properties rather than calling `env()` at the point of
    * use, for one reason: `env()` cannot be overridden, so a test could never
-   * prove the padding responds to a real inset. This can be set on the root
-   * element, which is exactly how the 34px case is exercised.
+   * prove the padding responds to a real inset. These can be set on the root
+   * element, which is exactly how the asymmetric case is exercised.
    *
-   * Not a theme token and not part of the spacing scale. It is a device fact,
-   * so it is declared once and never redefined in `.dark`.
+   * Not theme tokens and not part of the spacing scale. They are device facts,
+   * so they are declared once and never redefined in `.dark`.
    */
+  --ns-safe-area-top: env(safe-area-inset-top, 0px);
+  --ns-safe-area-right: env(safe-area-inset-right, 0px);
   --ns-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --ns-safe-area-left: env(safe-area-inset-left, 0px);
 }
 
 .dark {
@@ -184,14 +191,69 @@
 }
 
 /*
- * Keeps a bottom-anchored surface clear of the home indicator.
+ * Safe-area padding utilities.
  *
- * Applied to the element that paints the background, so the inset strip is
- * covered by that surface rather than left as a transparent gap, and so an
- * `absolute bottom-full` child sits above the whole padded box.
+ * Each one goes on the element that *paints* its edge — a header, a footer, a
+ * navigation bar — never on the shell wrapper. That is what keeps backgrounds
+ * running edge to edge while their content stays inside the safe rectangle.
+ *
+ * Exactly one element owns each physical edge of each shell; see the comment in
+ * the layout that claims it. Adding a second owner is the mistake these
+ * utilities are easy enough to make, so the ownership is written down.
  */
-@utility pb-safe-area-bottom {
-  padding-bottom: var(--ns-safe-area-bottom, 0px);
+
+/*
+ * Every padding utility below takes `max(existing, inset)`.
+ *
+ * That is the invariant, not a detail: a bare `padding: var(--inset)` would
+ * *replace* whatever padding the element already had, so at a zero inset a
+ * `py-12` main would collapse to nothing, and a 10px inset would shrink a 32px
+ * gap. The base comes from `--ns-pad-*`, which callers set with Tailwind's own
+ * responsive variants, so the existing spacing is always the floor and a cutout
+ * can only widen it.
+ */
+
+/** Top edge: the notch. Claimed by each shell's header. */
+@utility pt-safe-area {
+  padding-top: max(var(--ns-pad-top, 0px), var(--ns-safe-area-top, 0px));
+}
+
+/**
+ * Bottom edge: the home indicator. Claimed by the app's bottom bar below `md`,
+ * the app `<main>` at and above `md` where that bar is hidden, the marketing
+ * footer, and the auth/admin `<main>`.
+ *
+ * On the bottom bar this also means `bg-surface` covers the inset strip rather
+ * than leaving a transparent gap, and an `absolute bottom-full` child sits above
+ * the whole padded box.
+ */
+@utility pb-safe-area {
+  padding-bottom: max(var(--ns-pad-bottom, 0px), var(--ns-safe-area-bottom, 0px));
+}
+
+/** Left edge only, for the sidebar — which does render on a landscape phone. */
+@utility pl-safe-area {
+  padding-left: max(var(--ns-pad-left, 0px), var(--ns-safe-area-left, 0px));
+}
+
+/**
+ * Inline edges: rounded corners and landscape cutouts. The gutter comes from
+ * `--ns-gutter` for the same reason the others take a base.
+ */
+@utility px-safe-area {
+  padding-inline-start: max(var(--ns-gutter, 0px), var(--ns-safe-area-left, 0px));
+  padding-inline-end: max(var(--ns-gutter, 0px), var(--ns-safe-area-right, 0px));
+}
+
+/**
+ * The skip link is absolutely positioned, so it would otherwise land under the
+ * notch or a corner cutout the moment it receives focus. Offsets the existing
+ * `top-3 left-3` by the inset instead of replacing it, so the focus ring keeps
+ * its usual gap from the edge.
+ */
+@utility skip-link-inset {
+  top: calc(0.75rem + var(--ns-safe-area-top, 0px));
+  left: calc(0.75rem + var(--ns-safe-area-left, 0px));
 }
 
 @utility aurora-glow {

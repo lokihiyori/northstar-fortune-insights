@@ -84,23 +84,59 @@ describe("audited shells use dynamic viewport height", () => {
 describe("safe-area inset", () => {
   const CSS = readFileSync(path.join(APP, "globals.css"), "utf8");
 
-  it("derives the bottom inset from env() with a zero default", () => {
+  /*
+   * This is the one part of the contract a browser test cannot reach.
+   *
+   * The e2e suite simulates a device by setting `--ns-safe-area-*` directly,
+   * which means it would keep passing even if the property were wired to
+   * nothing — or to a misspelled `env()` keyword. Asserting the declarations
+   * themselves is what proves the production path is real.
+   */
+  it.each([
+    ["top", "safe-area-inset-top"],
+    ["right", "safe-area-inset-right"],
+    ["bottom", "safe-area-inset-bottom"],
+    ["left", "safe-area-inset-left"],
+  ])("derives the %s inset from env() with a zero default", (edge, keyword) => {
     // The zero default is what keeps every non-notched device unaffected.
-    expect(CSS).toContain("--ns-safe-area-bottom: env(safe-area-inset-bottom, 0px);");
+    expect(CSS).toContain(`--ns-safe-area-${edge}: env(${keyword}, 0px);`);
   });
 
-  it("exposes it as a utility that reads the custom property", () => {
-    /*
-     * Indirection through the property is the testable part: `env()` cannot be
-     * overridden, so a browser test can only simulate a real inset by setting
-     * `--ns-safe-area-bottom` on the root element.
-     */
-    expect(CSS).toMatch(
-      /@utility pb-safe-area-bottom\s*\{[^}]*padding-bottom:\s*var\(--ns-safe-area-bottom, 0px\);/,
+  /*
+   * `max()`, never a bare assignment.
+   *
+   * `padding: var(--inset)` would *replace* whatever padding the element
+   * already had — a `py-12` main would collapse to nothing at a zero inset, and
+   * a 10px inset would shrink a 32px gap. The existing spacing is the floor; a
+   * cutout can only widen it. Both mistakes were made and caught here.
+   */
+  it.each([
+    ["pt-safe-area", "padding-top", "--ns-pad-top", "--ns-safe-area-top"],
+    ["pb-safe-area", "padding-bottom", "--ns-pad-bottom", "--ns-safe-area-bottom"],
+    ["pl-safe-area", "padding-left", "--ns-pad-left", "--ns-safe-area-left"],
+  ])("%s takes the larger of its base and the inset", (utility, property, base, inset) => {
+    const block = CSS.slice(CSS.indexOf(`@utility ${utility} {`));
+    expect(block).toContain(`${property}: max(var(${base}, 0px), var(${inset}, 0px));`);
+  });
+
+  it("takes the larger of the gutter and the inline inset, never the smaller", () => {
+    const block = CSS.slice(CSS.indexOf("@utility px-safe-area"));
+    expect(block).toContain(
+      "padding-inline-start: max(var(--ns-gutter, 0px), var(--ns-safe-area-left, 0px));",
+    );
+    expect(block).toContain(
+      "padding-inline-end: max(var(--ns-gutter, 0px), var(--ns-safe-area-right, 0px));",
     );
   });
 
-  it("does not redefine the inset per theme", () => {
+  it("offsets the skip link by the top and left insets", () => {
+    // Absolutely positioned, so it would otherwise land under the notch.
+    const block = CSS.slice(CSS.indexOf("@utility skip-link-inset"));
+    expect(block).toContain("top: calc(0.75rem + var(--ns-safe-area-top, 0px));");
+    expect(block).toContain("left: calc(0.75rem + var(--ns-safe-area-left, 0px));");
+  });
+
+  it("does not redefine the insets per theme", () => {
     // A device fact, not a token. Redefining it in `.dark` would be a bug.
     // Bounded to the block itself — `.dark {` to the `}` that closes it — so
     // the `@utility` further down the file is not swept in.
@@ -109,6 +145,10 @@ describe("safe-area inset", () => {
     const dark = CSS.slice(start, CSS.indexOf("\n}", start));
 
     expect(dark).toContain("--ns-brand-teal");
-    expect(dark).not.toContain("--ns-safe-area-bottom");
+    for (const edge of ["top", "right", "bottom", "left"]) {
+      expect(dark, `.dark redefines --ns-safe-area-${edge}`).not.toContain(
+        `--ns-safe-area-${edge}`,
+      );
+    }
   });
 });

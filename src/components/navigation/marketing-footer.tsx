@@ -24,7 +24,9 @@ const GROUPS = [
 
 export function MarketingFooter() {
   return (
-    <footer className="border-border bg-surface border-t">
+    // Bottom edge owner for the marketing shell. `bg-surface` still reaches the
+    // physical edge; the inset only keeps the last row of links above it.
+    <footer className="border-border bg-surface pb-safe-area border-t">
       <Container className="grid gap-10 py-14 sm:grid-cols-2 lg:grid-cols-4">
         <div className="lg:col-span-2">
           <div className="flex items-center gap-2">

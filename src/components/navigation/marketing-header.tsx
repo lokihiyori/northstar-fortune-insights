@@ -43,7 +43,9 @@ export function MarketingHeader() {
   return (
     <header
       className={cn(
-        "top-0 z-50 w-full border-b transition-colors duration-200",
+        // Top edge owner for the marketing shell. The background and border
+        // keep painting through the notch; only the content is pushed down.
+        "pt-safe-area top-0 z-50 w-full border-b transition-colors duration-200",
         scrolled
           ? "border-border bg-background/85 sticky backdrop-blur-md"
           : "relative border-transparent",

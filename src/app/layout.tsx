@@ -38,7 +38,7 @@ export const viewport: Viewport = {
    * every inset resolves to 0 and the sticky bottom navigation can never learn
    * that a home indicator is there. `cover` lets the page reach the physical
    * edges, which is what makes the inset non-zero — and is why the bar carries
-   * `pb-safe-area-bottom` to keep its controls clear of it.
+   * `pb-safe-area` to keep its controls clear of it.
    */
   viewportFit: "cover",
 };

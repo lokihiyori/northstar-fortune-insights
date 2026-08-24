@@ -36,7 +36,12 @@ export function AppSidebar() {
   return (
     <nav
       aria-label="Application"
-      className="border-border bg-surface hidden w-56 shrink-0 border-r md:block"
+      /*
+       * Left edge owner whenever this is the visible navigation. It is not
+       * desktop-only: a landscape phone is 844px wide, so `md:block` shows the
+       * sidebar and hides the bottom bar, putting this against the cutout.
+       */
+      className="border-border bg-surface pl-safe-area hidden w-56 shrink-0 border-r md:block"
     >
       <ul className="sticky top-0 space-y-1 p-4">
         {APP_NAV.map((item) => {
@@ -104,14 +109,25 @@ export function MobileBottomNav() {
     <nav
       aria-label="Application"
       /*
-       * `pb-safe-area-bottom` sits on the nav itself, not on the list inside it,
-       * for three reasons: `bg-surface` then paints the inset strip instead of
-       * leaving a transparent gap over the page; the controls keep their own
-       * 44px box above the padding rather than absorbing it; and the disclosure
-       * panel's `bottom-full` resolves against the padded box, so it clears the
-       * whole bar. The inset is 0 on any device without one.
+       * Bottom edge owner for the app shell below `md`, and deliberately *not*
+       * an inline owner.
+       *
+       * It sits on the nav rather than the list inside it for three reasons:
+       * `bg-surface` then paints the inset strip instead of leaving a
+       * transparent gap over the page; the controls keep their own 44px box
+       * above the padding rather than absorbing it; and the disclosure panel's
+       * `bottom-full` resolves against the padded box, so it clears the whole
+       * bar. The inset is 0 on any device without one.
+       *
+       * No inline padding, because inline insets come from landscape cutouts and
+       * in landscape this bar is gone — 844px clears `md`, so the sidebar
+       * renders instead and carries the left edge. Portrait reports 0 on both
+       * inline edges on real hardware. Padding it anyway is not free: at 320px a
+       * 44px inset per side leaves 232px for five labels that need 294px, which
+       * overflows the page by 17px and drops a target under 44px wide. Measured,
+       * not assumed.
        */
-      className="border-border bg-surface pb-safe-area-bottom sticky bottom-0 z-40 border-t md:hidden"
+      className="border-border bg-surface pb-safe-area sticky bottom-0 z-40 border-t md:hidden"
     >
       {/*
        * Dismisses on an outside tap. `aria-hidden` with no accessible name and
