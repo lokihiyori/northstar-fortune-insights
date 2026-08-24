@@ -103,7 +103,15 @@ export function MobileBottomNav() {
   return (
     <nav
       aria-label="Application"
-      className="border-border bg-surface sticky bottom-0 z-40 border-t md:hidden"
+      /*
+       * `pb-safe-area-bottom` sits on the nav itself, not on the list inside it,
+       * for three reasons: `bg-surface` then paints the inset strip instead of
+       * leaving a transparent gap over the page; the controls keep their own
+       * 44px box above the padding rather than absorbing it; and the disclosure
+       * panel's `bottom-full` resolves against the padded box, so it clears the
+       * whole bar. The inset is 0 on any device without one.
+       */
+      className="border-border bg-surface pb-safe-area-bottom sticky bottom-0 z-40 border-t md:hidden"
     >
       {/*
        * Dismisses on an outside tap. `aria-hidden` with no accessible name and

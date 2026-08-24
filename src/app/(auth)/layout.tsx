@@ -5,7 +5,7 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-dvh flex-col">
       <header className="border-border border-b">
         <Container className="flex h-16 items-center justify-between">
           <Logo />

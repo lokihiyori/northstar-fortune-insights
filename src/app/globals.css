@@ -58,6 +58,21 @@
   /* Derived: the single low-opacity aurora glow permitted on backgrounds. */
   --ns-aurora-from: rgb(26 139 135 / 0.14);
   --ns-aurora-to: rgb(18 59 93 / 0.1);
+
+  /*
+   * The device's bottom safe-area inset — the home-indicator strip on a notched
+   * phone — defaulting to 0 everywhere else. Non-zero only when the document
+   * opts in with `viewport-fit=cover`, which `src/app/layout.tsx` does.
+   *
+   * Read through a custom property rather than calling `env()` at the point of
+   * use, for one reason: `env()` cannot be overridden, so a test could never
+   * prove the padding responds to a real inset. This can be set on the root
+   * element, which is exactly how the 34px case is exercised.
+   *
+   * Not a theme token and not part of the spacing scale. It is a device fact,
+   * so it is declared once and never redefined in `.dark`.
+   */
+  --ns-safe-area-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .dark {
@@ -166,6 +181,17 @@
       transition-duration: 0.01ms !important;
     }
   }
+}
+
+/*
+ * Keeps a bottom-anchored surface clear of the home indicator.
+ *
+ * Applied to the element that paints the background, so the inset strip is
+ * covered by that surface rather than left as a transparent gap, and so an
+ * `absolute bottom-full` child sits above the whole padded box.
+ */
+@utility pb-safe-area-bottom {
+  padding-bottom: var(--ns-safe-area-bottom, 0px);
 }
 
 @utility aurora-glow {
