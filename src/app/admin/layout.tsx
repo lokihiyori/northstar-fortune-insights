@@ -28,15 +28,16 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   const admin = await requireAdmin("/admin");
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-dvh flex-col">
       <a
         href="#admin-main"
-        className="focus:rounded-control focus:bg-surface focus:shadow-card sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-[100] focus:px-4 focus:py-2 focus:text-sm"
+        className="focus:rounded-control focus:bg-surface focus:shadow-card focus:skip-link-inset sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:px-4 focus:py-2 focus:text-sm"
       >
         Skip to content
       </a>
 
-      <header className="border-border bg-surface border-b">
+      {/* Top edge owner for this shell. */}
+      <header className="border-border bg-surface pt-safe-area border-b">
         <Container className="flex h-16 items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Logo href="/admin" />
@@ -74,7 +75,12 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         </Container>
       </div>
 
-      <main id="admin-main" tabIndex={-1} className="flex-1 py-8 focus-visible:outline-none">
+      {/* Bottom edge owner: the admin shell has no footer and no bottom bar. */}
+      <main
+        id="admin-main"
+        tabIndex={-1}
+        className="pb-safe-area flex-1 pt-8 [--ns-pad-bottom:2rem] focus-visible:outline-none"
+      >
         <Container>{children}</Container>
       </main>
     </div>

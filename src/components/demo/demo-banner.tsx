@@ -19,7 +19,7 @@ export function DemoBanner() {
     <div
       role="note"
       aria-label="Demo workspace notice"
-      className="border-warning/40 bg-warning/10 text-text-primary border-b px-5 py-2.5 sm:px-8"
+      className="border-warning/40 bg-warning/10 text-text-primary px-safe-area border-b py-2.5 [--ns-gutter:1.25rem] sm:[--ns-gutter:2rem]"
     >
       <p className="mx-auto flex max-w-5xl items-start gap-2 text-sm">
         <span aria-hidden="true" className="text-warning font-semibold">

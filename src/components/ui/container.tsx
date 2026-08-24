@@ -12,7 +12,22 @@ export function Container({
   children: ReactNode;
 }) {
   return (
-    <Tag className={cn("mx-auto w-full max-w-[1280px] px-5 sm:px-8", className)}>{children}</Tag>
+    <Tag
+      className={cn(
+        "mx-auto w-full max-w-[1280px]",
+        /*
+         * The inline safe-area owner for the marketing, auth, and admin shells.
+         *
+         * `--ns-gutter` carries what `px-5 sm:px-8` used to say, and
+         * `px-safe-area` takes the larger of it and the cutout. At a zero inset
+         * the computed padding is 1.25rem / 2rem exactly as before.
+         */
+        "px-safe-area [--ns-gutter:1.25rem] sm:[--ns-gutter:2rem]",
+        className,
+      )}
+    >
+      {children}
+    </Tag>
   );
 }
 

@@ -19,16 +19,17 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const isDemo = isDemoSession(user);
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-dvh flex-col">
       <a
         href="#main"
-        className="focus:rounded-control focus:bg-surface focus:shadow-card sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-[100] focus:px-4 focus:py-2 focus:text-sm"
+        className="focus:rounded-control focus:bg-surface focus:shadow-card focus:skip-link-inset sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:px-4 focus:py-2 focus:text-sm"
       >
         Skip to content
       </a>
 
-      <header className="border-border bg-surface border-b">
-        <div className="flex h-16 items-center justify-between gap-4 px-5 sm:px-8">
+      {/* Top edge owner for this shell. */}
+      <header className="border-border bg-surface pt-safe-area border-b">
+        <div className="px-safe-area flex h-16 items-center justify-between gap-4 [--ns-gutter:1.25rem] sm:[--ns-gutter:2rem]">
           <Logo href="/app" />
           <div className="flex items-center gap-3">
             {isDemo ? <DemoBadge /> : null}
@@ -52,7 +53,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         <main
           id="main"
           tabIndex={-1}
-          className="min-w-0 flex-1 px-5 py-8 focus-visible:outline-none sm:px-8"
+          className="px-safe-area md:pb-safe-area min-w-0 flex-1 py-8 [--ns-gutter:1.25rem] [--ns-pad-bottom:2rem] focus-visible:outline-none sm:[--ns-gutter:2rem]"
         >
           {children}
         </main>
