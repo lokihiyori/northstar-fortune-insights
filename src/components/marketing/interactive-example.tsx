@@ -97,7 +97,21 @@ export function InteractiveExample() {
           </div>
         </aside>
 
-        <div className="lg:col-span-8">
+        {/*
+         * `min-w-0` is load-bearing, not tidying.
+         *
+         * A grid item defaults to `min-width: auto`, so its minimum size is its
+         * content's min-content. The map's tablist is three cards with a 15rem
+         * readable minimum, giving 744px, and that escaped the tablist's own
+         * `overflow-x-auto` through this item: the single mobile column resolved
+         * to 786px inside a 350px grid, the aside stretched to match, and the
+         * document scrolled sideways by 416px at 390 and 486px at 320.
+         *
+         * Opting out of the automatic minimum lets the column take the space
+         * actually available, so the tablist finally scrolls inside its own box
+         * — which is what it was always styled to do.
+         */}
+        <div className="min-w-0 lg:col-span-8">
           <RecommendationMap report={report} />
         </div>
       </div>
